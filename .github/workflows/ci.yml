@@ -53,12 +53,14 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
-      - name: Test Local Action
-        id: test-action
+      - name: Test Local Action Latest Version
+        id: test-action-latest-version
         uses: ./
         with:
-          milliseconds: 2000
+          version: latest
 
-      - name: Print Output
-        id: output
-        run: echo "${{ steps.test-action.outputs.time }}"
+      - name: Test Local Action Latest Version
+        id: test-action-specific-version
+        uses: ./
+        with:
+          version: v2.7.1
