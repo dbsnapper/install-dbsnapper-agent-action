@@ -54,7 +54,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Test Local Action Latest Version
-        id: test-action
+        id: test-action-latest-version
         uses: ./
         with:
           version: latest
