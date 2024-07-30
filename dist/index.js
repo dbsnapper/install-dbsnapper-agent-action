@@ -28807,7 +28807,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.run = void 0;
+exports.run = run;
 const core = __importStar(__nccwpck_require__(2186));
 const tc = __importStar(__nccwpck_require__(7784));
 const util_1 = __nccwpck_require__(2629);
@@ -28838,7 +28838,6 @@ async function run() {
         }
     }
 }
-exports.run = run;
 
 
 /***/ }),
@@ -28875,7 +28874,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getDownloadUrl = void 0;
+exports.getDownloadUrl = getDownloadUrl;
 const core = __importStar(__nccwpck_require__(2186));
 const httpm = __importStar(__nccwpck_require__(6255));
 const os_1 = __importDefault(__nccwpck_require__(2037));
@@ -28913,7 +28912,6 @@ async function getDownloadUrl(version) {
     core.info(`Downloading latest DBSnapper Agent version ${latestVersion}.`);
     return getUrl(latestVersion);
 }
-exports.getDownloadUrl = getDownloadUrl;
 function stripLeadingV(version) {
     return version.replace(/^v/, '');
 }
