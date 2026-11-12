@@ -11,12 +11,23 @@ import { resolveRelease } from './util'
 export async function run(): Promise<void> {
   try {
     const version: string = core.getInput('version')
-    const release = await resolveRelease(version)
+    const token: string = core.getInput('token')
+    const release = await resolveRelease(version, token)
     core.info(
       `Installing DBSnapper Agent ${release.tag} (${release.archiveName})`
     )
 
-    const archive = await tc.downloadTool(release.archiveUrl)
+    let archive: string
+    try {
+      archive = await tc.downloadTool(release.archiveUrl)
+    } catch (error) {
+      if (error instanceof tc.HTTPError && error.httpStatusCode === 404) {
+        throw new Error(
+          `Release ${release.tag} has no file ${release.archiveName} (HTTP 404 for ${release.archiveUrl}). The action supports Linux runners (x64, arm64) and DBSnapper Agent 2.7.1 or newer`
+        )
+      }
+      throw error
+    }
 
     let checksumsPath: string
     try {

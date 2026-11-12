@@ -142,3 +142,51 @@ then `<path from GITHUB_PATH>/dbsnapper --version`.
 - **CI workflow** (`.github/workflows/ci.yml`) still installs `latest` and
   `v2.7.1`; both pass the new action locally (table above). Not run on GitHub:
   no push.
+
+## Paused: follow-up `dbs-install-action-polish` (IA1–IA5, lint, alerts)
+
+Paused by dbs-conductor (fleet quota cap) on 2026-11-12, before any test run.
+Branch `dbs-install-action-polish` from `main` a7a2099. The commit holding
+this section is work in progress: **not built, not tested, `dist/` not
+rebuilt** (so `check-dist` would fail on it). No push.
+
+Done in source (unverified):
+
+- IA1: `token` input (default `${{ github.token }}`) in `action.yml`; sent as
+  `authorization: Bearer …` only on the `api.github.com` lookup
+  (`src/util.ts` `getLatestTag`); HTTP 403/429 says "most likely the GitHub
+  rate limit" and "Pin a version".
+- IA2: archive HTTP 404 names release, file, and "Linux runners (x64, arm64)
+  and DBSnapper Agent 2.7.1 or newer" (`src/main.ts`); same line in the
+  readme.
+- IA3: network and JSON errors of the lookup carry "Failed to resolve the
+  latest DBSnapper Agent release".
+- IA5 (trivial, so done): `version` must be `latest`, empty, or
+  `v?X.Y.Z[-suffix]`.
+- IA4: `__tests__/util.test.ts` fakes the lookup (200 with and without token,
+  403, 429, network error, invalid versions); `__tests__/main.test.ts` adds
+  the archive-404 test and asserts downloads carry no token.
+- Lint: run 43292054322 (the only lint run on record, `gh run list`: 1) failed
+  in three linters. Cause of the TypeScript parsing errors: super-linter v6
+  ignores `TYPESCRIPT_DEFAULT_STYLE` (log line "it's deprecated, and
+  super-linter will ignore it"), so ts-standard ran on every file. Fix in
+  `.github/workflows/linter.yml`: `VALIDATE_TYPESCRIPT_STANDARD: false`
+  (ESLint and Prettier stay). Markdown: `MD013` skips tables and code blocks
+  (`.github/linters/.markdown-lint.yml`). Readme terms fixed.
+
+Next steps on resume:
+
+1. Wait for `npm ci` (was running under the heavy lock), then
+   `npx jest --coverage=false`, `npm run lint`, `npm run format:check`; fix.
+2. Run the new tests against a7a2099 sources (`git archive a7a2099` to /tmp)
+   for the before/after table.
+3. Dependabot: `npm update undici braces` (undici to 5.29.x via
+   `@actions/http-client` ^5.25.4 range; braces to 3.0.3); check
+   `package-lock.json`.
+4. Fix this file for textlint (prerelease, Jest, end-to-end, filename,
+   readme in code spans) and the long list lines 111–113 (move the messages
+   into a fenced block). Ideally run super-linter slim v6 locally on loopback
+   to prove the lint passes.
+5. `npm run bundle`; end-to-end bundle runs for `latest`, `v2.9.0`, `2.7.1`.
+6. Private-terms and key-format scans; commit by path; `review` to
+   dbs-conductor.

@@ -2,6 +2,11 @@
 MD004:
   style: dash
 
+# Line length: Prettier wraps prose at 80 but cannot wrap table rows or code
+MD013:
+  tables: false
+  code_blocks: false
+
 # Ordered list item prefix
 MD029:
   style: one
