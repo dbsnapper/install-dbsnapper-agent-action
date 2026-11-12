@@ -10,7 +10,9 @@ branding:
 # Define your inputs here.
 inputs:
   version:
-    description: 'Version of the DBSnapper Agent to install'
+    description:
+      'Version of the DBSnapper Agent to install (2.9.0 or v2.9.0); latest is
+      the newest release that is not a pre-release'
     required: false
     default: latest
 

@@ -1,30 +1,25 @@
 import { expect, test } from '@jest/globals'
-import { getDownloadUrl } from '../src/util'
-
 import os from 'os'
-
-jest.mock('os')
+import { resolveRelease } from '../src/util'
 
 describe('util.ts', () => {
-  test('get latest download url', async () => {
-    os.platform = jest.fn().mockReturnValue('linux')
-    os.arch = jest.fn().mockReturnValue('amd64')
-
-    await expect(getDownloadUrl('latest')).resolves.toBeTruthy()
+  beforeEach(() => {
+    jest.restoreAllMocks()
+    jest.spyOn(os, 'platform').mockReturnValue('linux')
+    jest.spyOn(os, 'arch').mockReturnValue('x64')
   })
 
-  test('get specific version download url', async () => {
-    const version = '2.7.2'
-    const ops = 'linux'
-    const arch = 'amd64'
-    const filename = `dbsnapper_${version}_${ops}_${arch}`
-
-    os.platform = jest.fn().mockReturnValue(ops)
-    os.arch = jest.fn().mockReturnValue(arch)
-
-    const url = await getDownloadUrl(version)
-    expect(url).toEqual(
-      `https://github.com/dbsnapper/dbsnapper/releases/download/v${version}/${filename}.tar.gz`
-    )
-  })
+  test.each(['2.7.2', 'v2.7.2'])(
+    'pinned version %s resolves to that release without asking GitHub',
+    async version => {
+      await expect(resolveRelease(version)).resolves.toEqual({
+        tag: 'v2.7.2',
+        archiveName: 'dbsnapper_2.7.2_linux_amd64.tar.gz',
+        archiveUrl:
+          'https://github.com/dbsnapper/dbsnapper/releases/download/v2.7.2/dbsnapper_2.7.2_linux_amd64.tar.gz',
+        checksumsUrl:
+          'https://github.com/dbsnapper/dbsnapper/releases/download/v2.7.2/checksums.txt'
+      })
+    }
+  )
 })

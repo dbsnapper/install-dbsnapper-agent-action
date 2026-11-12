@@ -28778,6 +28778,48 @@ exports["default"] = _default;
 
 /***/ }),
 
+/***/ 6410:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.verifyChecksum = verifyChecksum;
+const crypto_1 = __importDefault(__nccwpck_require__(6113));
+const fs_1 = __importDefault(__nccwpck_require__(7147));
+/**
+ * Checks `archivePath` against its entry in a goreleaser checksums file
+ * (`<sha256>  <file name>` per line). Throws when the file name has no entry
+ * or the SHA-256 differs.
+ */
+async function verifyChecksum(archivePath, archiveName, checksums) {
+    let expected;
+    for (const line of checksums.split('\n')) {
+        const match = /^([0-9a-fA-F]{64})\s+\*?(\S+)\s*$/.exec(line);
+        if (match && match[2] === archiveName) {
+            expected = match[1].toLowerCase();
+            break;
+        }
+    }
+    if (!expected) {
+        throw new Error(`The release's checksums file has no entry for ${archiveName}; refusing to install an unverified archive`);
+    }
+    const hash = crypto_1.default.createHash('sha256');
+    for await (const chunk of fs_1.default.createReadStream(archivePath)) {
+        hash.update(chunk);
+    }
+    const actual = hash.digest('hex');
+    if (actual !== expected) {
+        throw new Error(`Checksum mismatch for ${archiveName}: expected SHA-256 ${expected}, got ${actual}. The download is corrupt or was altered; refusing to install it`);
+    }
+}
+
+
+/***/ }),
+
 /***/ 399:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -28806,10 +28848,15 @@ var __importStar = (this && this.__importStar) || function (mod) {
     __setModuleDefault(result, mod);
     return result;
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.run = run;
 const core = __importStar(__nccwpck_require__(2186));
 const tc = __importStar(__nccwpck_require__(7784));
+const fs_1 = __importDefault(__nccwpck_require__(7147));
+const checksum_1 = __nccwpck_require__(6410);
 const util_1 = __nccwpck_require__(2629);
 /**
  * The main function for the action.
@@ -28818,9 +28865,22 @@ const util_1 = __nccwpck_require__(2629);
 async function run() {
     try {
         const version = core.getInput('version');
-        // Download the specific version of the tool
-        const archive = await tc.downloadTool(await (0, util_1.getDownloadUrl)(version));
-        // Extract the tarball onto the runner
+        const release = await (0, util_1.resolveRelease)(version);
+        core.info(`Installing DBSnapper Agent ${release.tag} (${release.archiveName})`);
+        const archive = await tc.downloadTool(release.archiveUrl);
+        let checksumsPath;
+        try {
+            checksumsPath = await tc.downloadTool(release.checksumsUrl);
+        }
+        catch (error) {
+            const reason = error instanceof tc.HTTPError && error.httpStatusCode === 404
+                ? 'the release publishes no checksums file'
+                : `${error instanceof Error ? error.message : error}`;
+            throw new Error(`Cannot verify ${release.archiveName}: downloading ${release.checksumsUrl} failed (${reason}); refusing to install an unverified archive`);
+        }
+        // Verify before unpacking: nothing from an unverified archive reaches the runner
+        await (0, checksum_1.verifyChecksum)(archive, release.archiveName, await fs_1.default.promises.readFile(checksumsPath, 'utf8'));
+        core.info(`Verified SHA-256 of ${release.archiveName}`);
         const agent = await tc.extractTar(archive);
         // Expose the tool by adding it to the PATH
         core.addPath(agent);
@@ -28874,10 +28934,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getDownloadUrl = getDownloadUrl;
-const core = __importStar(__nccwpck_require__(2186));
+exports.resolveRelease = resolveRelease;
 const httpm = __importStar(__nccwpck_require__(6255));
 const os_1 = __importDefault(__nccwpck_require__(2037));
+const REPO = 'dbsnapper/dbsnapper';
+const CHECKSUMS_FILE = 'checksums.txt';
 // arch in [arm, x32, x64...] (https://nodejs.org/api/os.html#os_os_arch)
 // return value in [amd64, 386, arm]
 function mapArch(arch) {
@@ -28896,47 +28957,52 @@ function mapOS(ops) {
     };
     return mappings[ops] || ops;
 }
-function getUrl(version) {
-    const ops = mapOS(os_1.default.platform());
-    const arch = mapArch(os_1.default.arch());
-    const filename = `dbsnapper_${stripLeadingV(version)}_${ops}_${arch}`;
-    const extension = 'tar.gz';
-    return `https://github.com/dbsnapper/dbsnapper/releases/download/v${stripLeadingV(version)}/${filename}.${extension}`;
-}
-async function getDownloadUrl(version) {
-    if (!!version && version !== 'latest') {
-        core.info(`Downloading DBSnapper Agent version ${version}`);
-        return getUrl(version);
-    }
-    const latestVersion = await getLatestVersion();
-    core.info(`Downloading latest DBSnapper Agent version ${latestVersion}.`);
-    return getUrl(latestVersion);
-}
 function stripLeadingV(version) {
     return version.replace(/^v/, '');
 }
-async function getLatestVersion() {
-    try {
-        const httpClient = new httpm.HttpClient('dbsnapper-install-gh-action', [], {
-            headers: {
-                Accept: 'application/vnd.github+json',
-                'X-GitHub-Api-Version': '2022-11-28'
-            }
-        });
-        const res = await httpClient.get(`https://api.github.com/repos/dbsnapper/dbsnapper/releases?per_page=1`);
-        const body = await res.readBody();
-        const releases = JSON.parse(body);
-        const latestRelease = releases[0];
-        const latestVersion = latestRelease.tag_name || latestRelease.name;
-        if (!latestVersion) {
-            core.setFailed('Failed to retrieve latest release');
+function releaseFileUrl(tag, file) {
+    return `https://github.com/${REPO}/releases/download/${tag}/${file}`;
+}
+/**
+ * Resolves the release to install: `latest` (or no version) is the newest
+ * published release that is not a pre-release; anything else is taken as a
+ * pinned version (`2.9.0` or `v2.9.0`).
+ */
+async function resolveRelease(version) {
+    const tag = !!version && version !== 'latest'
+        ? `v${stripLeadingV(version)}`
+        : await getLatestTag();
+    const ops = mapOS(os_1.default.platform());
+    const arch = mapArch(os_1.default.arch());
+    const archiveName = `dbsnapper_${stripLeadingV(tag)}_${ops}_${arch}.tar.gz`;
+    return {
+        tag,
+        archiveName,
+        archiveUrl: releaseFileUrl(tag, archiveName),
+        checksumsUrl: releaseFileUrl(tag, CHECKSUMS_FILE)
+    };
+}
+// GitHub's "latest release" is the newest release that is neither a draft
+// nor a pre-release:
+// https://docs.github.com/en/rest/releases/releases#get-the-latest-release
+async function getLatestTag() {
+    const httpClient = new httpm.HttpClient('dbsnapper-install-gh-action', [], {
+        headers: {
+            Accept: 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28'
         }
-        return latestVersion;
+    });
+    const url = `https://api.github.com/repos/${REPO}/releases/latest`;
+    const res = await httpClient.get(url);
+    const body = await res.readBody();
+    if (res.message.statusCode !== 200) {
+        throw new Error(`Failed to resolve the latest DBSnapper Agent release: ${url} answered HTTP ${res.message.statusCode}`);
     }
-    catch (err) {
-        core.setFailed('Failed to resolve latest DBSnapper Agent version');
-        throw err;
+    const release = JSON.parse(body);
+    if (!release.tag_name) {
+        throw new Error(`Failed to resolve the latest DBSnapper Agent release: ${url} returned no tag`);
     }
+    return `v${stripLeadingV(release.tag_name)}`;
 }
 
 
