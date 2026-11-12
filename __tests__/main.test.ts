@@ -7,76 +7,144 @@
  */
 
 import * as core from '@actions/core'
+import * as httpm from '@actions/http-client'
 import * as tc from '@actions/tool-cache'
+import crypto from 'crypto'
+import fs from 'fs'
 import os from 'os'
+import path from 'path'
 import * as main from '../src/main'
 
-// // Mock the action's main function
-const runMock = jest.spyOn(main, 'run')
+const ARCHIVE_NAME = 'dbsnapper_2.9.0_linux_amd64.tar.gz'
+const ARCHIVE_URL = `https://github.com/dbsnapper/dbsnapper/releases/download/v2.9.0/${ARCHIVE_NAME}`
+const CHECKSUMS_URL =
+  'https://github.com/dbsnapper/dbsnapper/releases/download/v2.9.0/checksums.txt'
+const ARCHIVE_BYTES = 'made-up agent archive bytes'
+const ARCHIVE_SHA256 = crypto
+  .createHash('sha256')
+  .update(ARCHIVE_BYTES)
+  .digest('hex')
 
-jest.mock('os')
-
-let errorMock: jest.SpyInstance
-let getInputMock: jest.SpyInstance
-let addPathMock: jest.SpyInstance
+let tmpDir: string
+let archivePath: string
+let setFailedMock: jest.SpyInstance
 let downloadToolMock: jest.SpyInstance
 let extractTarMock: jest.SpyInstance
+let addPathMock: jest.SpyInstance
+
+function useInput(version: string): void {
+  jest
+    .spyOn(core, 'getInput')
+    .mockImplementation((name: string) => (name === 'version' ? version : ''))
+}
+
+// Serves the archive and, unless `checksums` is undefined, a checksums file
+// with the given content; a missing checksums file answers HTTP 404.
+function serveRelease(checksums: string | undefined): void {
+  const checksumsPath = path.join(tmpDir, 'checksums.txt')
+  if (checksums !== undefined) {
+    fs.writeFileSync(checksumsPath, checksums)
+  }
+  downloadToolMock.mockImplementation(async (url: string) => {
+    if (url === ARCHIVE_URL) return archivePath
+    if (url === CHECKSUMS_URL && checksums !== undefined) return checksumsPath
+    throw new tc.HTTPError(404)
+  })
+}
 
 describe('action', () => {
   beforeEach(() => {
-    jest.clearAllMocks()
+    jest.restoreAllMocks()
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'install-action-test-'))
+    archivePath = path.join(tmpDir, 'archive')
+    fs.writeFileSync(archivePath, ARCHIVE_BYTES)
 
-    getInputMock = jest.spyOn(core, 'getInput').mockImplementation()
+    jest.spyOn(os, 'platform').mockReturnValue('linux')
+    jest.spyOn(os, 'arch').mockReturnValue('x64')
+    jest.spyOn(core, 'info').mockImplementation()
+    setFailedMock = jest.spyOn(core, 'setFailed').mockImplementation()
     addPathMock = jest.spyOn(core, 'addPath').mockImplementation()
-    errorMock = jest.spyOn(core, 'setFailed').mockImplementation()
-    downloadToolMock = jest.spyOn(tc, 'downloadTool').mockImplementation()
-    extractTarMock = jest.spyOn(tc, 'extractTar').mockImplementation()
-
-    os.platform = jest.fn().mockReturnValue('linux')
-    os.arch = jest.fn().mockReturnValue('amd64')
+    downloadToolMock = jest.spyOn(tc, 'downloadTool')
+    extractTarMock = jest
+      .spyOn(tc, 'extractTar')
+      .mockResolvedValue('/path/to/agent')
   })
 
-  it('sets the version output', async () => {
-    // Set the action's inputs as return values from core.getInput()
-    getInputMock.mockImplementation((name: string): string => {
-      switch (name) {
-        case 'version':
-          return 'v2.7.2'
-        default:
-          return ''
-      }
-    })
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
 
-    downloadToolMock.mockImplementation((dlUrl: string): string => {
-      switch (dlUrl) {
-        case 'https://github.com/dbsnapper/dbsnapper/releases/download/v2.7.2/dbsnapper_2.7.2_linux_amd64.tar.gz':
-          return 'fake-tar-path'
-        default:
-          return ''
-      }
-    })
-    extractTarMock.mockImplementation((tarPath: string): string => {
-      switch (tarPath) {
-        case 'fake-tar-path':
-          return '/path/to/tarball'
-        default:
-          return ''
-      }
-    })
-    addPathMock.mockImplementation((cliPath: string): void => {
-      switch (cliPath) {
-        case '/path/to/tarball':
-          return
-        default:
-          throw new Error('test: invalid cli path')
-      }
+  it('installs a pinned version whose archive matches the published checksum', async () => {
+    useInput('v2.9.0')
+    serveRelease(
+      `${'0'.repeat(64)}  dbsnapper_2.9.0_darwin_all.zip\n${ARCHIVE_SHA256}  ${ARCHIVE_NAME}\n`
+    )
+
+    await main.run()
+
+    expect(setFailedMock).not.toHaveBeenCalled()
+    expect(extractTarMock).toHaveBeenCalledWith(archivePath)
+    expect(addPathMock).toHaveBeenCalledWith('/path/to/agent')
+  })
+
+  it('fails without unpacking when the archive does not match its checksum', async () => {
+    useInput('v2.9.0')
+    serveRelease(`${'a'.repeat(64)}  ${ARCHIVE_NAME}\n`)
+
+    await main.run()
+
+    expect(setFailedMock).toHaveBeenCalledWith(
+      expect.stringContaining(`Checksum mismatch for ${ARCHIVE_NAME}`)
+    )
+    expect(extractTarMock).not.toHaveBeenCalled()
+    expect(addPathMock).not.toHaveBeenCalled()
+  })
+
+  it('fails without unpacking when the release has no checksums file', async () => {
+    useInput('v2.9.0')
+    serveRelease(undefined)
+
+    await main.run()
+
+    expect(setFailedMock).toHaveBeenCalledWith(
+      expect.stringContaining('the release publishes no checksums file')
+    )
+    expect(extractTarMock).not.toHaveBeenCalled()
+    expect(addPathMock).not.toHaveBeenCalled()
+  })
+
+  it('fails without unpacking when the checksums file does not list the archive', async () => {
+    useInput('v2.9.0')
+    serveRelease(`${ARCHIVE_SHA256}  dbsnapper_2.9.0_linux_arm64.tar.gz\n`)
+
+    await main.run()
+
+    expect(setFailedMock).toHaveBeenCalledWith(
+      expect.stringContaining(`no entry for ${ARCHIVE_NAME}`)
+    )
+    expect(extractTarMock).not.toHaveBeenCalled()
+    expect(addPathMock).not.toHaveBeenCalled()
+  })
+
+  // Talks to the real GitHub API and release downloads (read-only).
+  it('latest downloads the archive of the newest full release, which exists', async () => {
+    useInput('latest')
+    const requested: string[] = []
+    downloadToolMock.mockImplementation(async (url: string) => {
+      requested.push(url)
+      throw new Error('test: stop after the first download')
     })
 
     await main.run()
-    expect(runMock).toHaveReturned()
-    expect(errorMock).not.toHaveBeenCalled()
-    expect(downloadToolMock).toHaveBeenCalled()
-    expect(extractTarMock).toHaveBeenCalled()
-    expect(addPathMock).toHaveBeenCalled()
-  })
+
+    expect(requested).toHaveLength(1)
+    // A full release tag carries no pre-release suffix (v3.0.0-pr1)
+    expect(requested[0]).toMatch(
+      /^https:\/\/github\.com\/dbsnapper\/dbsnapper\/releases\/download\/v\d+\.\d+\.\d+\/dbsnapper_\d+\.\d+\.\d+_linux_amd64\.tar\.gz$/
+    )
+    const res = await new httpm.HttpClient('install-action-test').head(
+      requested[0]
+    )
+    expect(res.message.statusCode).toBe(200)
+  }, 30000)
 })

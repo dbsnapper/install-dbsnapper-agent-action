@@ -14,7 +14,12 @@ part of a GitHub Actions workflow.
 ## Usage
 
 The action takes an optional `version` input that specifies the version of the
-Agent to install. If no version is specified, the latest version is installed.
+Agent to install.
+
+| `version`                    | What gets installed                                                                    |
+| ---------------------------- | -------------------------------------------------------------------------------------- |
+| `latest` (default) or empty  | the newest published release that is **not a pre-release** (GitHub's "latest release") |
+| `2.9.0` or `v2.9.0` (pinned) | exactly that release                                                                   |
 
 ```yaml
 steps:
@@ -23,6 +28,23 @@ steps:
     with:
       version: latest
 ```
+
+### Checksum verification
+
+Every DBSnapper release publishes a `checksums.txt` with the SHA-256 of each
+file. Before it unpacks anything, the action downloads that file from the same
+release and compares the archive's SHA-256 with its entry. The step fails, and
+nothing is installed, when:
+
+- the archive's SHA-256 differs from the published one
+  (`Checksum mismatch for …`);
+- the release has no `checksums.txt`, or it cannot be downloaded
+  (`Cannot verify …`);
+- `checksums.txt` has no entry for the archive (`… has no entry for …`).
+
+The checksums file comes from the same GitHub release as the archive: it catches
+a corrupted or swapped download, not a release whose files were all replaced
+together.
 
 ## Sample DBSnapper job
 
