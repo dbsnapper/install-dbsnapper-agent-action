@@ -86,7 +86,7 @@ All heavy commands ran under `_rules-fix.md` §3
 - `__tests__/util.test.ts`: `2.7.2` and `v2.7.2` both resolve to the same tag,
   archive and checksums URL with no network call (2 tests, pass).
 
-### End-to-end: the built `dist/index.js` on alfa (linux arm64), real downloads
+### End-to-end: the built `dist/index.js` on alfa (Linux arm64), real downloads
 
 Command, per version `v`, in `/tmp/dbs-install-action`:
 `INPUT_VERSION=$v RUNNER_TEMP=… RUNNER_TOOL_CACHE=… GITHUB_PATH=… node dist/index.js`,
@@ -141,12 +141,11 @@ then `<path from GITHUB_PATH>/dbsnapper --version`.
 
 - **Release the action** (Joe's call): a new tag and moving `v1`. Until then
   users get the old behaviour.
-- **macOS and Windows runners were not working before and still are not**
-  [from the asset list, not run]: the action builds
-  `dbsnapper_<v>_darwin_<arch>.tar.gz`, while releases publish
-  `dbsnapper_<v>_darwin_all.zip`, and no Windows archive exists. Out of F15
-  scope.
-- **Pinned versions ≤ 2.7.0** were not installable before either: their linux
+- **macOS and Windows runners were not working before and still are not** [from
+  the asset list, not run]: the action builds `dbsnapper_<v>_darwin_<arch>.tar.gz`,
+  while releases publish `dbsnapper_<v>_darwin_all.zip`, and no Windows archive exists.
+  Out of F15 scope.
+- **Pinned versions ≤ 2.7.0** were not installable before either: their Linux
   archives use a different filename (0 of the 22 releases from v2.7.0 down have
   `dbsnapper_<v>_linux_amd64.tar.gz`, per the release list above).
 - **Unauthenticated GitHub API call for `latest`** (60 requests per hour per
@@ -159,99 +158,164 @@ then `<path from GITHUB_PATH>/dbsnapper --version`.
 
 Branch `dbs-install-action-polish` from `main` a7a2099, for review findings
 IA1–IA5 (`reports/review-dbs-install-action.md`), the failing `Lint Codebase`
-run and three Dependabot alerts. Decision A (`install action: merge, polish
-before v1`). No push by me, no tag, no release.
+run and three Dependabot alerts. Decision A
+(`install action: merge, polish before v1`). No push by me, no tag, no release.
 
-State on 2026-11-14 21:40Z: **work in progress**. Source, tests, docs and lint
-configuration are written; the test, lint, bundle and dependency runs are
-blocked by the alfa load brake (no Node test or lint runs until 23:15Z, then
-one test file at a time). `dist/` is **not** rebuilt yet, so `check-dist`
-fails on this branch until step 4 below.
+State on 2026-11-14 22:33Z: done, waiting for review. Every run below ran on
+alfa under the conductor's load brake (`flock /tmp/dbs-heavy.lock`,
+`GOMAXPROCS=2 nice -n 19`, load1 < 16, one test file at a time). No CI run: no
+push.
 
-### The change
+### Follow-up changes
 
 - **IA1 (token):** `action.yml` gains a `token` input, default
-  `${{ github.token }}`. `src/util.ts` sends it as `authorization: Bearer …`
-  on the one `api.github.com` lookup for `latest`, never with the
-  `github.com` release downloads. HTTP 403 or 429 fails with
-  `… answered HTTP 403, most likely the GitHub rate limit. Pin a version
-  (version: 2.9.0) to skip this lookup, or pass a token with a higher limit`.
-- **IA2 (missing archive):** an HTTP 404 for the archive fails with
-  `Release v2.9.0 has no file dbsnapper_2.9.0_darwin_arm64.tar.gz (HTTP 404
-  for …). The action supports Linux runners (x64, arm64) and DBSnapper Agent
-  2.7.1 or newer` (`src/main.ts`). The readme has the same sentence.
+  `${{ github.token }}`. `src/util.ts` sends it as `authorization: Bearer …` on
+  the one `api.github.com` lookup for `latest`, never with the `github.com`
+  release downloads. HTTP 403 or 429 fails with the message in the block below.
+- **IA2 (missing archive):** an HTTP 404 for the archive fails with the release,
+  the file and the supported runners and versions (`src/main.ts`). The readme
+  has the same sentence under Usage.
 - **IA3 (network error):** network errors and answers that are not JSON both
   start with `Failed to resolve the latest DBSnapper Agent release:`.
-- **IA5 (version format, trivial so done):** `version` must be `latest`,
-  empty, or a version number (`2.9.0`, `v2.9.0`, `v3.0.0-pr1`); anything else
-  fails with `Invalid version "…"` before any request. All 34 published tags
-  match the pattern [INFERENCE: tag list read in the F15 work, pattern not run
-  against it].
+- **IA5 (version format, trivial so done):** `version` must be `latest`, empty,
+  or a version number (`2.9.0`, `v2.9.0`, `v3.0.0-pr1`); anything else fails
+  with `Invalid version "…"` before any request. All 34 published release tags
+  match the pattern (`gh api 'repos/dbsnapper/dbsnapper/releases?per_page=100'`:
+  34 tags, `grep -c -E` with the pattern: 34).
 - **IA4 (tests):**
   - `__tests__/util.test.ts` fakes the GitHub answer (no network): 200 with a
     token (token sent to `api.github.com`), 200 without (anonymous), 403, 429,
     network error, 5 invalid versions; pinned versions make no request.
   - `__tests__/main.test.ts`: new test for the missing archive (IA2 message,
     nothing unpacked); the pinned test now asserts that the two release
-    downloads get no token. The live `latest` test stays as the canary.
-- **Lint (`Lint Codebase`, run 43292054322 on a7a2099, the only run on record:
-  `gh run list --workflow linter.yml` = 1):** three linters failed.
-  - TypeScript parsing errors on every file: super-linter v6 ignores
-    `TYPESCRIPT_DEFAULT_STYLE` (its log: "it's deprecated, and super-linter
-    will ignore it"), so ts-standard ran with its own parser setup. This is
-    configuration, not my change; the same files pass ESLint and Prettier in
-    the same run. Fix: `VALIDATE_TYPESCRIPT_STANDARD: false` in
-    `.github/workflows/linter.yml`.
-  - Markdown line length: `MD013` now skips tables and code blocks
-    (`.github/linters/.markdown-lint.yml`); Prettier wraps prose at 80 but
-    cannot wrap table rows. This file's long message lines are in a fenced
-    block now.
-  - Natural language (terminology): the flagged terms in this file and the
-    readme are reworded (prerelease, Jest, end-to-end, filename, readme).
-  - Local check so far: `markdownlint-cli` 0.41.0 (super-linter v6's version)
-    with the repo's config: the readme 0 errors; this file 6 errors, all in
-    the section this one replaced. The textlint run did not load its rule (my
-    invocation); rerun pending.
-- **Dependabot:** not done yet. Plan: `npm update undici braces` within the
-  current ranges: undici 5.28.4 → 5.29.0 (runtime, through
-  `@actions/http-client` `^5.25.4`; fixes the low and the medium alert),
-  braces 3.0.2 → 3.0.3 (development; pulls fill-range 7.0.1 → 7.1.x; fixes
-  the high alert). Both versions exist (`npm view`).
+    downloads get no token. The live `latest` test stays as the canary and asks
+    anonymously (tests hold no real token).
 
-### Runs done
+The new messages:
 
-| Run (under `flock /tmp/dbs-heavy.lock nice -n 19`)          | Result                                                             |
-| ----------------------------------------------------------- | ------------------------------------------------------------------ |
-| `npm ci`                                                    | exit 0, 570 packages                                               |
-| `npx jest --coverage=false __tests__/util.test.ts`, 1st run | exit 1: compile error, header type in `src/util.ts:100`; now fixed |
+```text
+Failed to resolve the latest DBSnapper Agent release:
+  https://api.github.com/repos/dbsnapper/dbsnapper/releases/latest answered
+  HTTP 403, most likely the GitHub rate limit. Pin a version (version: 2.9.0)
+  to skip this lookup, or pass a token with a higher limit (token input)
+Failed to resolve the latest DBSnapper Agent release:
+  https://api.github.com/repos/dbsnapper/dbsnapper/releases/latest:
+  getaddrinfo ENOTFOUND api.github.com
+Release v2.9.0 has no file dbsnapper_2.9.0_darwin_arm64.tar.gz (HTTP 404 for
+  …). The action supports Linux runners (x64, arm64) and DBSnapper Agent 2.7.1
+  or newer
+Invalid version "2.9": use latest or a version number such as 2.9.0
+```
 
-### Runs needed (in this order, one file at a time, after 23:15Z)
+### Lint
 
-1. `npx tsc -p .github/linters/tsconfig.json`, then
-   `npx jest --coverage=false --forceExit __tests__/util.test.ts`, then the
-   same for `__tests__/main.test.ts` and `__tests__/index.test.ts`.
-2. Before/after: the same two test files against a7a2099 in
-   `/tmp/dbs-polish/before` (prepared: `git archive a7a2099`, new tests copied
-   in), with ts-jest diagnostics off so each test reports on its own.
-3. `npm update undici braces`; check `package-lock.json` (undici 5.29.0,
-   braces 3.0.3, `package.json` unchanged).
-4. `npm run bundle` (also runs Prettier over all files), `npm run lint`,
-   `npm run format:check`, then `git diff --stat dist/`.
-5. End-to-end with the built bundle: `latest`, `v2.9.0`, `2.7.1` as in the F15
-   table, plus `version: 2.9` (expect `Invalid version`).
-6. markdownlint and textlint (super-linter v6 versions) on the readme and this
-   file.
-7. Private-terms and key-format scans; commit by path; `review`.
+`Lint Codebase` run 43292054322 on a7a2099 (the only run of that workflow on
+record: `gh run list --workflow linter.yml` = 1) failed in three linters:
 
-### Decisions (made in this task)
+- **TypeScript parsing errors on every file, untouched ones included:**
+  super-linter v6 ignores `TYPESCRIPT_DEFAULT_STYLE` (its log: "it's deprecated,
+  and super-linter will ignore it"), so ts-standard ran with its own parser
+  setup. Configuration, not the F15 change: the same files passed ESLint
+  (`TYPESCRIPT_ES`) and Prettier in the same run. Fix:
+  `VALIDATE_TYPESCRIPT_STANDARD: false` in `.github/workflows/linter.yml`.
+- **Markdown line length:** `MD013` now skips tables and code blocks
+  (`.github/linters/.markdown-lint.yml`); Prettier wraps prose at 80 but cannot
+  wrap table rows. Long messages in this file are in fenced blocks.
+- **Natural language (terminology):** the flagged terms in this file and the
+  readme are reworded (prerelease, Jest, end-to-end, filename, readme).
+- Not run: super-linter itself (a large container image on a loaded host). Its
+  two failing Markdown and natural-language linters ran locally at super-linter
+  v6's versions and settings (table below).
 
-- Token default `${{ github.token }}` rather than empty: every workflow has
-  it, and it lifts the anonymous limit with no setup. It goes only to
+### Dependabot
+
+- `npm update undici braces`, within the current ranges: undici 5.28.4 → 5.29.0
+  (runtime, through `@actions/http-client` `^5.25.4`; the low and the medium
+  alert), braces 3.0.2 → 3.0.3 (development; with fill-range 7.0.1 → 7.1.1; the
+  high alert). `package.json` unchanged; `package-lock.json` 3 packages.
+- `npm audit` still lists 28 advisories (8 low, 8 moderate, 12 high), more than
+  the 3 open Dependabot alerts. See Open items.
+
+### Follow-up tests: before and after
+
+Before = a7a2099 sources with the new test files copied in
+(`/tmp/dbs-polish/before`, ts-jest type diagnostics off so each test reports on
+its own); `npx jest --coverage=false --forceExit <file>`, one file per run.
+
+| File                      | Before (a7a2099)            | After                        |
+| ------------------------- | --------------------------- | ---------------------------- |
+| `__tests__/util.test.ts`  | exit 1: 2 passed, 10 failed | exit 0: 12 passed            |
+| `__tests__/main.test.ts`  | exit 1: 5 passed, 1 failed  | exit 0: 6 passed (live, too) |
+| `__tests__/index.test.ts` | not run (unchanged)         | exit 0: 1 passed             |
+
+- Fail before, pass after: the 5 invalid versions (IA5), 403 and 429 (IA1), the
+  network error (IA3), the token sent with the lookup (IA1), and the missing
+  archive (IA2).
+- Fails before for a weaker reason: "latest without a token asks GitHub
+  anonymously". The old code was anonymous too; the test fails only because it
+  called the client without a headers argument.
+- Pass before and after (guards): the 2 pinned versions in `util.test.ts`; in
+  `main.test.ts` the pinned install (now also: no token on downloads), the 3
+  checksum failures and the live `latest` test.
+- The first run of `__tests__/main.test.ts` after the change failed the live
+  test: it sent the fake test token to the real API. Fixed by asking anonymously
+  in that test.
+
+### Other runs (after)
+
+| Run                                         | Result                                                      |
+| ------------------------------------------- | ----------------------------------------------------------- |
+| `npm run bundle`                            | exit 0; `dist/index.js` and `dist/index.js.map` rebuilt     |
+| `npm run lint`                              | exit 0                                                      |
+| `npm run format:check`                      | exit 0                                                      |
+| `npx tsc -p .github/linters/tsconfig.json`  | exit 2, TS6059: that config cannot run alone (pre-existing) |
+| markdownlint-cli 0.41.0, readme + this file | 1st: readme 0, this file 4 duplicate headings; rerun exit 0 |
+| textlint 14 + terminology, same files       | 1st: readme 0, this file 4 terms; rerun exit 0              |
+
+- `tsc`: the linters' tsconfig extends the root one, whose `rootDir` is `./src`,
+  and adds `__tests__`. ESLint only uses it for parsing, and ts-jest type-checks
+  each test file (all compiled), so I left it.
+
+### Follow-up end-to-end: built `dist/index.js` on alfa (Linux arm64)
+
+`/tmp/dbs-polish/e2e.sh`: per version, `INPUT_VERSION=$v INPUT_TOKEN=`
+(anonymous)
+`RUNNER_TEMP=… RUNNER_TOOL_CACHE=… GITHUB_PATH=… node dist/index.js`, then the
+agent's `--version` from the path it added.
+
+| `version` | Result                                                                                                       |
+| --------- | ------------------------------------------------------------------------------------------------------------ |
+| `latest`  | ✅ v2.9.0, `Verified SHA-256 of dbsnapper_2.9.0_linux_arm64.tar.gz`, exit 0, agent 2.9.0                     |
+| `v2.9.0`  | ✅ verified, exit 0, agent 2.9.0                                                                             |
+| `2.7.1`   | ✅ verified, exit 0, agent 2.7.1                                                                             |
+| `2.9`     | ✅ refused: `Invalid version "2.9": use latest or a version number such as 2.9.0`, exit 1, nothing on `PATH` |
+
+### Follow-up decisions
+
+- Token default `${{ github.token }}` rather than empty: every workflow has it,
+  and it lifts the anonymous limit with no setup. It goes only to
   `api.github.com`; the release files are public and need none.
 - 403 and 429 both named as the rate limit: GitHub answers a spent limit with
-  either. A 403 for another reason gets the same hint, which still points at
-  the fix (pin a version).
+  either. A 403 for another reason gets the same hint, which still points at the
+  fix (pin a version).
 - IA5 done, since it is one pattern and a test.
-- ts-standard switched off instead of configured: the repo already lints
+- ts-standard switched off instead of configured: the repository already lints
   TypeScript with ESLint (its own rules) and Prettier, in CI and in
   super-linter.
+- Dependabot scope kept to the 3 open alerts within current major versions, as
+  the handoff says.
+
+### Open items (follow-up)
+
+- **More advisories than the 3 alerts** (`npm audit`, 28): undici ≤ 6.29 and
+  `@fastify/busboy` (high) need `@actions/http-client` 4.x, a new major version
+  [INFERENCE: npm's fix suggestion]; uuid through `@actions/core` 1.10.1 and `@actions/tool-cache`
+  2.0.1 (moderate) has a fix without a new major version; the rest are development
+  tools. Recommended: `install action: deps, minor now` (bump `@actions/core` and
+  `@actions/tool-cache` within their majors) and decide the http-client major with
+  the `v1` release. The action downloads only from GitHub over HTTPS, so the undici
+  advisories (fetch decompression, WebSocket, Set-Cookie, `upgrade`) are low exposure
+  here [INFERENCE: read from the advisory titles].
+- **CI not run** (GitHub minutes capped until 12-01): `check-dist`,
+  `Continuous Integration` and `Lint Codebase` run on the next push to `main`.
+- **Release** (Joe's call): a new tag and moving `v1`.

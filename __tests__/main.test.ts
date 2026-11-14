@@ -32,8 +32,8 @@ let downloadToolMock: jest.SpyInstance
 let extractTarMock: jest.SpyInstance
 let addPathMock: jest.SpyInstance
 
-function useInput(version: string): void {
-  const inputs: Record<string, string> = { version, token: 'workflow-token' }
+function useInput(version: string, token = 'workflow-token'): void {
+  const inputs: Record<string, string> = { version, token }
   jest
     .spyOn(core, 'getInput')
     .mockImplementation((name: string) => inputs[name] ?? '')
@@ -87,7 +87,10 @@ describe('action', () => {
     expect(extractTarMock).toHaveBeenCalledWith(archivePath)
     expect(addPathMock).toHaveBeenCalledWith('/path/to/agent')
     // The token goes only to api.github.com, never with release downloads
-    expect(downloadToolMock.mock.calls).toEqual([[ARCHIVE_URL], [CHECKSUMS_URL]])
+    expect(downloadToolMock.mock.calls).toEqual([
+      [ARCHIVE_URL],
+      [CHECKSUMS_URL]
+    ])
   })
 
   it('fails without unpacking when the archive does not match its checksum', async () => {
@@ -151,9 +154,10 @@ describe('action', () => {
     expect(addPathMock).not.toHaveBeenCalled()
   })
 
-  // Talks to the real GitHub API and release downloads (read-only).
+  // Talks to the real GitHub API (anonymously: no real token in tests) and
+  // release downloads (read-only).
   it('latest downloads the archive of the newest full release, which exists', async () => {
-    useInput('latest')
+    useInput('latest', '')
     const requested: string[] = []
     downloadToolMock.mockImplementation(async (url: string) => {
       requested.push(url)

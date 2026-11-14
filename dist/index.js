@@ -11300,7 +11300,7 @@ module.exports = {
 
 
 const { parseSetCookie } = __nccwpck_require__(4408)
-const { stringify, getHeadersList } = __nccwpck_require__(3121)
+const { stringify } = __nccwpck_require__(3121)
 const { webidl } = __nccwpck_require__(1744)
 const { Headers } = __nccwpck_require__(554)
 
@@ -11376,14 +11376,13 @@ function getSetCookies (headers) {
 
   webidl.brandCheck(headers, Headers, { strict: false })
 
-  const cookies = getHeadersList(headers).cookies
+  const cookies = headers.getSetCookie()
 
   if (!cookies) {
     return []
   }
 
-  // In older versions of undici, cookies is a list of name:value.
-  return cookies.map((pair) => parseSetCookie(Array.isArray(pair) ? pair[1] : pair))
+  return cookies.map((pair) => parseSetCookie(pair))
 }
 
 /**
@@ -11811,14 +11810,15 @@ module.exports = {
 /***/ }),
 
 /***/ 3121:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+/***/ ((module) => {
 
 "use strict";
 
 
-const assert = __nccwpck_require__(9491)
-const { kHeadersList } = __nccwpck_require__(2785)
-
+/**
+ * @param {string} value
+ * @returns {boolean}
+ */
 function isCTLExcludingHtab (value) {
   if (value.length === 0) {
     return false
@@ -12079,31 +12079,13 @@ function stringify (cookie) {
   return out.join('; ')
 }
 
-let kHeadersListNode
-
-function getHeadersList (headers) {
-  if (headers[kHeadersList]) {
-    return headers[kHeadersList]
-  }
-
-  if (!kHeadersListNode) {
-    kHeadersListNode = Object.getOwnPropertySymbols(headers).find(
-      (symbol) => symbol.description === 'headers list'
-    )
-
-    assert(kHeadersListNode, 'Headers cannot be parsed')
-  }
-
-  const headersList = headers[kHeadersListNode]
-  assert(headersList)
-
-  return headersList
-}
-
 module.exports = {
   isCTLExcludingHtab,
-  stringify,
-  getHeadersList
+  validateCookieName,
+  validateCookiePath,
+  validateCookieValue,
+  toIMFDate,
+  stringify
 }
 
 
@@ -14032,6 +14014,14 @@ const { isUint8Array, isArrayBuffer } = __nccwpck_require__(9830)
 const { File: UndiciFile } = __nccwpck_require__(8511)
 const { parseMIMEType, serializeAMimeType } = __nccwpck_require__(685)
 
+let random
+try {
+  const crypto = __nccwpck_require__(6005)
+  random = (max) => crypto.randomInt(0, max)
+} catch {
+  random = (max) => Math.floor(Math.random(max))
+}
+
 let ReadableStream = globalThis.ReadableStream
 
 /** @type {globalThis['File']} */
@@ -14117,7 +14107,7 @@ function extractBody (object, keepalive = false) {
     // Set source to a copy of the bytes held by object.
     source = new Uint8Array(object.buffer.slice(object.byteOffset, object.byteOffset + object.byteLength))
   } else if (util.isFormDataLike(object)) {
-    const boundary = `----formdata-undici-0${`${Math.floor(Math.random() * 1e11)}`.padStart(11, '0')}`
+    const boundary = `----formdata-undici-0${`${random(1e11)}`.padStart(11, '0')}`
     const prefix = `--${boundary}\r\nContent-Disposition: form-data`
 
     /*! formdata-polyfill. MIT License. Jimmy Wärting <https://jimmy.warting.se/opensource> */
@@ -16099,6 +16089,7 @@ const {
   isValidHeaderName,
   isValidHeaderValue
 } = __nccwpck_require__(2538)
+const util = __nccwpck_require__(3837)
 const { webidl } = __nccwpck_require__(1744)
 const assert = __nccwpck_require__(9491)
 
@@ -16652,6 +16643,9 @@ Object.defineProperties(Headers.prototype, {
   [Symbol.toStringTag]: {
     value: 'Headers',
     configurable: true
+  },
+  [util.inspect.custom]: {
+    enumerable: false
   }
 })
 
@@ -25828,6 +25822,20 @@ class Pool extends PoolBase {
       ? { ...options.interceptors }
       : undefined
     this[kFactory] = factory
+
+    this.on('connectionError', (origin, targets, error) => {
+      // If a connection error occurs, we remove the client from the pool,
+      // and emit a connectionError event. They will not be re-used.
+      // Fixes https://github.com/nodejs/undici/issues/3895
+      for (const target of targets) {
+        // Do not use kRemoveClient here, as it will close the client,
+        // but the client cannot be closed in this state.
+        const idx = this[kClients].indexOf(target)
+        if (idx !== -1) {
+          this[kClients].splice(idx, 1)
+        }
+      }
+    })
   }
 
   [kGetDispatcher] () {
@@ -28865,9 +28873,19 @@ const util_1 = __nccwpck_require__(2629);
 async function run() {
     try {
         const version = core.getInput('version');
-        const release = await (0, util_1.resolveRelease)(version);
+        const token = core.getInput('token');
+        const release = await (0, util_1.resolveRelease)(version, token);
         core.info(`Installing DBSnapper Agent ${release.tag} (${release.archiveName})`);
-        const archive = await tc.downloadTool(release.archiveUrl);
+        let archive;
+        try {
+            archive = await tc.downloadTool(release.archiveUrl);
+        }
+        catch (error) {
+            if (error instanceof tc.HTTPError && error.httpStatusCode === 404) {
+                throw new Error(`Release ${release.tag} has no file ${release.archiveName} (HTTP 404 for ${release.archiveUrl}). The action supports Linux runners (x64, arm64) and DBSnapper Agent 2.7.1 or newer`);
+            }
+            throw error;
+        }
         let checksumsPath;
         try {
             checksumsPath = await tc.downloadTool(release.checksumsUrl);
@@ -28963,15 +28981,25 @@ function stripLeadingV(version) {
 function releaseFileUrl(tag, file) {
     return `https://github.com/${REPO}/releases/download/${tag}/${file}`;
 }
+// A release version as the agent's tags spell it: 2.9.0, v2.9.0, v3.0.0-pr1
+const VERSION_PATTERN = /^v?\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/;
 /**
  * Resolves the release to install: `latest` (or no version) is the newest
- * published release that is not a pre-release; anything else is taken as a
- * pinned version (`2.9.0` or `v2.9.0`).
+ * published release that is not a prerelease; anything else must be a version
+ * number (`2.9.0` or `v2.9.0`) and is installed as pinned. `token` is sent only
+ * to api.github.com, for the `latest` lookup.
  */
-async function resolveRelease(version) {
-    const tag = !!version && version !== 'latest'
-        ? `v${stripLeadingV(version)}`
-        : await getLatestTag();
+async function resolveRelease(version, token) {
+    let tag;
+    if (!version || version === 'latest') {
+        tag = await getLatestTag(token);
+    }
+    else if (VERSION_PATTERN.test(version)) {
+        tag = `v${stripLeadingV(version)}`;
+    }
+    else {
+        throw new Error(`Invalid version "${version}": use latest or a version number such as 2.9.0`);
+    }
     const ops = mapOS(os_1.default.platform());
     const arch = mapArch(os_1.default.arch());
     const archiveName = `dbsnapper_${stripLeadingV(tag)}_${ops}_${arch}.tar.gz`;
@@ -28982,10 +29010,13 @@ async function resolveRelease(version) {
         checksumsUrl: releaseFileUrl(tag, CHECKSUMS_FILE)
     };
 }
+function latestLookupError(reason) {
+    return new Error(`Failed to resolve the latest DBSnapper Agent release: ${reason}`);
+}
 // GitHub's "latest release" is the newest release that is neither a draft
-// nor a pre-release:
+// nor a prerelease:
 // https://docs.github.com/en/rest/releases/releases#get-the-latest-release
-async function getLatestTag() {
+async function getLatestTag(token) {
     const httpClient = new httpm.HttpClient('dbsnapper-install-gh-action', [], {
         headers: {
             Accept: 'application/vnd.github+json',
@@ -28993,14 +29024,34 @@ async function getLatestTag() {
         }
     });
     const url = `https://api.github.com/repos/${REPO}/releases/latest`;
-    const res = await httpClient.get(url);
-    const body = await res.readBody();
-    if (res.message.statusCode !== 200) {
-        throw new Error(`Failed to resolve the latest DBSnapper Agent release: ${url} answered HTTP ${res.message.statusCode}`);
+    const headers = token
+        ? { authorization: `Bearer ${token}` }
+        : {};
+    let status;
+    let body;
+    try {
+        const res = await httpClient.get(url, headers);
+        status = res.message.statusCode;
+        body = await res.readBody();
     }
-    const release = JSON.parse(body);
+    catch (error) {
+        throw latestLookupError(`${url}: ${error instanceof Error ? error.message : error}`);
+    }
+    if (status === 403 || status === 429) {
+        throw latestLookupError(`${url} answered HTTP ${status}, most likely the GitHub rate limit. Pin a version (version: 2.9.0) to skip this lookup, or pass a token with a higher limit (token input)`);
+    }
+    if (status !== 200) {
+        throw latestLookupError(`${url} answered HTTP ${status}`);
+    }
+    let release;
+    try {
+        release = JSON.parse(body);
+    }
+    catch (error) {
+        throw latestLookupError(`${url} returned no JSON (${error instanceof Error ? error.message : error})`);
+    }
     if (!release.tag_name) {
-        throw new Error(`Failed to resolve the latest DBSnapper Agent release: ${url} returned no tag`);
+        throw latestLookupError(`${url} returned no tag`);
     }
     return `v${stripLeadingV(release.tag_name)}`;
 }
@@ -29109,6 +29160,14 @@ module.exports = require("https");
 
 "use strict";
 module.exports = require("net");
+
+/***/ }),
+
+/***/ 6005:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("node:crypto");
 
 /***/ }),
 

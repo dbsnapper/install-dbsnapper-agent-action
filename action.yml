@@ -18,8 +18,8 @@ inputs:
   token:
     description:
       'GitHub token for the latest-release lookup on api.github.com (only
-      there); the default is the workflow token, which lifts the anonymous
-      limit of 60 lookups per hour'
+      there); the default is the workflow token, which lifts the anonymous limit
+      of 60 lookups per hour'
     required: false
     default: ${{ github.token }}
 
