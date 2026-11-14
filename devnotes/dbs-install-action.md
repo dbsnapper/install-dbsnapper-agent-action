@@ -142,9 +142,10 @@ then `<path from GITHUB_PATH>/dbsnapper --version`.
 - **Release the action** (Joe's call): a new tag and moving `v1`. Until then
   users get the old behaviour.
 - **macOS and Windows runners were not working before and still are not** [from
-  the asset list, not run]: the action builds `dbsnapper_<v>_darwin_<arch>.tar.gz`,
-  while releases publish `dbsnapper_<v>_darwin_all.zip`, and no Windows archive exists.
-  Out of F15 scope.
+  the asset list, not run]: the action builds
+  `dbsnapper_<v>_darwin_<arch>.tar.gz`, while releases publish
+  `dbsnapper_<v>_darwin_all.zip`, and no Windows archive exists. Out of F15
+  scope.
 - **Pinned versions ≤ 2.7.0** were not installable before either: their Linux
   archives use a different filename (0 of the 22 releases from v2.7.0 down have
   `dbsnapper_<v>_linux_amd64.tar.gz`, per the release list above).
@@ -161,10 +162,11 @@ IA1–IA5 (`reports/review-dbs-install-action.md`), the failing `Lint Codebase`
 run and three Dependabot alerts. Decision A
 (`install action: merge, polish before v1`). No push by me, no tag, no release.
 
-State on 2026-11-14 22:33Z: done, waiting for review. Every run below ran on
-alfa under the conductor's load brake (`flock /tmp/dbs-heavy.lock`,
-`GOMAXPROCS=2 nice -n 19`, load1 < 16, one test file at a time). No CI run: no
-push.
+State on 2026-11-14 23:38Z: done, waiting for review (second round: direct
+dependencies within their majors, decided `install action: deps, minor now`).
+Every run below ran on alfa under the conductor's load brake
+(`flock /tmp/dbs-heavy.lock`, `GOMAXPROCS=2 nice -n 19`, load1 < 16, memory PSI
+avg60 < 5 from 23:29Z, one test file at a time). No CI run: no push.
 
 ### Follow-up changes
 
@@ -233,8 +235,36 @@ record: `gh run list --workflow linter.yml` = 1) failed in three linters:
   (runtime, through `@actions/http-client` `^5.25.4`; the low and the medium
   alert), braces 3.0.2 → 3.0.3 (development; with fill-range 7.0.1 → 7.1.1; the
   high alert). `package.json` unchanged; `package-lock.json` 3 packages.
-- `npm audit` still lists 28 advisories (8 low, 8 moderate, 12 high), more than
-  the 3 open Dependabot alerts. See Open items.
+- `npm audit` then listed 28 advisories (8 low, 8 moderate, 12 high), more than
+  the 3 open Dependabot alerts.
+
+### Direct dependencies within their majors (second round)
+
+Decision `install action: deps, minor now` (dbs-conductor, 11-14).
+
+- `npm update --save` (23:16Z, exit 0; npm warned once "ERESOLVE overriding peer
+  dependency"): every direct dependency to the newest version within its current
+  major; `package.json` ranges follow.
+  - Runtime: `@actions/core` 1.10.1 → 1.11.1, `@actions/http-client` 2.2.1 →
+    2.2.3, `@actions/tool-cache` 2.0.1 → 2.0.2. uuid is gone from the bundle
+    (`dist/licenses.txt` drops it).
+  - Development: `@types/jest` 29.5.14, `@types/node` 20.19.43, `@vercel/ncc`
+    0.38.4, `eslint` 8.57.1, `eslint-plugin-github` 5.1.8, `eslint-plugin-jest`
+    28.14.0, `eslint-plugin-jsonc` 2.21.1, `eslint-plugin-prettier` 5.5.7,
+    `prettier` 3.10.1, `prettier-eslint` 16.4.2, `ts-jest` 29.4.15, `typescript`
+    5.9.3. Unchanged: `jest` and `@jest/globals` 29.7.0, `@typescript-eslint/*`
+    7.18.0, `make-coverage-badge` 1.2.0 (already newest in their majors).
+- `npm audit fix` (no `--force`, 23:32Z): exit 1, nothing more it could fix
+  without a new major version.
+- `npm audit` after: **18** advisories (7 low, 5 moderate, 6 high), from 28.
+  - Runtime, in the bundle: `@actions/http-client` (moderate), undici (high),
+    `@fastify/busboy` (high). All three need `@actions/http-client` 4.x, a new
+    major version (npm's fix suggestion): left for the `v1` decision.
+  - Development only, not in `dist/`: `@typescript-eslint/*` and minimatch
+    (high, fix in `@typescript-eslint` 8.x), `prettier-eslint` (high, 17.x),
+    `jest`, `ts-jest` and their parts (low; npm suggests a `jest` downgrade).
+- Prettier 3.10 rewraps two list items of this file; nothing else in the source
+  changed formatting (`npm run format:check` exit 0 after `npm run bundle`).
 
 ### Follow-up tests: before and after
 
@@ -265,9 +295,9 @@ its own); `npx jest --coverage=false --forceExit <file>`, one file per run.
 
 | Run                                         | Result                                                      |
 | ------------------------------------------- | ----------------------------------------------------------- |
-| `npm run bundle`                            | exit 0; `dist/index.js` and `dist/index.js.map` rebuilt     |
-| `npm run lint`                              | exit 0                                                      |
-| `npm run format:check`                      | exit 0                                                      |
+| `npm run bundle`                            | exit 0; `dist/` rebuilt (round 1, and again in round 2)     |
+| `npm run lint`                              | exit 0 (both rounds)                                        |
+| `npm run format:check`                      | exit 0 (both rounds)                                        |
 | `npx tsc -p .github/linters/tsconfig.json`  | exit 2, TS6059: that config cannot run alone (pre-existing) |
 | markdownlint-cli 0.41.0, readme + this file | 1st: readme 0, this file 4 duplicate headings; rerun exit 0 |
 | textlint 14 + terminology, same files       | 1st: readme 0, this file 4 terms; rerun exit 0              |
@@ -277,6 +307,11 @@ its own); `npx jest --coverage=false --forceExit <file>`, one file per run.
   each test file (all compiled), so I left it.
 
 ### Follow-up end-to-end: built `dist/index.js` on alfa (Linux arm64)
+
+Round 2 (after the dependency updates, 23:36–23:37Z) repeated the three test
+files, one per run: `util.test.ts` 12 of 12, `main.test.ts` 6 of 6 (live test
+too), `index.test.ts` 1 of 1, each exit 0. The end-to-end runs below gave the
+same results in both rounds.
 
 `/tmp/dbs-polish/e2e.sh`: per version, `INPUT_VERSION=$v INPUT_TOKEN=`
 (anonymous)
@@ -302,20 +337,22 @@ agent's `--version` from the path it added.
 - ts-standard switched off instead of configured: the repository already lints
   TypeScript with ESLint (its own rules) and Prettier, in CI and in
   super-linter.
-- Dependabot scope kept to the 3 open alerts within current major versions, as
-  the handoff says.
+- Dependabot round 1 kept to the 3 open alerts, as the handoff says; round 2
+  took every direct dependency to the newest version within its major, as
+  decided.
 
 ### Open items (follow-up)
 
-- **More advisories than the 3 alerts** (`npm audit`, 28): undici ≤ 6.29 and
-  `@fastify/busboy` (high) need `@actions/http-client` 4.x, a new major version
-  [INFERENCE: npm's fix suggestion]; uuid through `@actions/core` 1.10.1 and `@actions/tool-cache`
-  2.0.1 (moderate) has a fix without a new major version; the rest are development
-  tools. Recommended: `install action: deps, minor now` (bump `@actions/core` and
-  `@actions/tool-cache` within their majors) and decide the http-client major with
-  the `v1` release. The action downloads only from GitHub over HTTPS, so the undici
-  advisories (fetch decompression, WebSocket, Set-Cookie, `upgrade`) are low exposure
-  here [INFERENCE: read from the advisory titles].
+- **`@actions/http-client` 4.x** (for the `v1` decision): it fixes the three
+  runtime advisories left (undici and `@fastify/busboy` high,
+  `@actions/http-client` moderate) [INFERENCE: npm's fix suggestion]. The action
+  downloads only from GitHub over HTTPS, so those undici advisories (fetch
+  decompression, WebSocket, Set-Cookie, `upgrade`) are low exposure here
+  [INFERENCE: read from the advisory titles]. `@actions/core` 3.x and
+  `@actions/tool-cache` 4.x are the matching majors (`npm outdated`).
+- **Development-tool advisories** (15 of the 18): `@typescript-eslint` 8.x and
+  `prettier-eslint` 17.x are new majors [INFERENCE: likely ESLint 9
+  configuration changes, not tried]; not in the bundle.
 - **CI not run** (GitHub minutes capped until 12-01): `check-dist`,
   `Continuous Integration` and `Lint Codebase` run on the next push to `main`.
 - **Release** (Joe's call): a new tag and moving `v1`.
