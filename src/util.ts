@@ -1,4 +1,5 @@
 import * as httpm from '@actions/http-client'
+import { OutgoingHttpHeaders } from 'http'
 import os from 'os'
 
 const REPO = 'dbsnapper/dbsnapper'
@@ -97,7 +98,9 @@ async function getLatestTag(token?: string): Promise<string> {
     }
   })
   const url = `https://api.github.com/repos/${REPO}/releases/latest`
-  const headers: httpm.Headers = token ? { authorization: `Bearer ${token}` } : {}
+  const headers: OutgoingHttpHeaders = token
+    ? { authorization: `Bearer ${token}` }
+    : {}
   let status: number | undefined
   let body: string
   try {
