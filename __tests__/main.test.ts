@@ -174,6 +174,8 @@ describe('action', () => {
     const res = await new httpm.HttpClient('install-action-test').head(
       requested[0]
     )
+    // An unread response keeps its socket, and Jest, from closing
+    await res.readBody()
     expect(res.message.statusCode).toBe(200)
   }, 30000)
 })

@@ -86,6 +86,36 @@ describe('util.ts', () => {
     }
   )
 
+  test('a refused token (HTTP 401) says so and names pinning a version or a valid token', async () => {
+    answerLookup(401, '{"message":"Bad credentials"}')
+
+    const lookup = resolveRelease('latest', 'expired-token')
+    await expect(lookup).rejects.toThrow(
+      `Failed to resolve the latest DBSnapper Agent release: ${LATEST_URL} answered HTTP 401: GitHub refused the token`
+    )
+    await expect(lookup).rejects.toThrow('Pin a version')
+    await expect(lookup).rejects.toThrow('pass a valid token')
+  })
+
+  test.each(['release-3', 'vv2.9.0', '../x', 'v2.9.0/../../x', 'v2.9.0?x'])(
+    'a latest tag that is not a version number (%s) is refused like the version input',
+    async tag => {
+      answerLookup(200, JSON.stringify({ tag_name: tag }))
+
+      await expect(resolveRelease('latest')).rejects.toThrow(
+        `Failed to resolve the latest DBSnapper Agent release: ${LATEST_URL} returned the tag ${JSON.stringify(tag)}, which is not a version number`
+      )
+    }
+  )
+
+  test('a JSON null answer fails with the lookup prefix', async () => {
+    answerLookup(200, 'null')
+
+    await expect(resolveRelease('latest')).rejects.toThrow(
+      `Failed to resolve the latest DBSnapper Agent release: ${LATEST_URL} returned no tag`
+    )
+  })
+
   test('a network error during the lookup says which lookup failed', async () => {
     jest
       .spyOn(httpm.HttpClient.prototype, 'get')

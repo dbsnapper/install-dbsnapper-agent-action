@@ -21,7 +21,7 @@
     ".": "./dist/index.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "scripts": {
     "bundle": "npm run format:write && npm run package",
@@ -41,6 +41,7 @@
     "verbose": true,
     "clearMocks": true,
     "testEnvironment": "node",
+    "resolver": "<rootDir>/script/jest-resolver.cjs",
     "moduleFileExtensions": [
       "js",
       "ts"
@@ -53,8 +54,21 @@
       "/dist/"
     ],
     "transform": {
-      "^.+\\.ts$": "ts-jest"
+      "^.+\\.ts$": "ts-jest",
+      "/node_modules/@actions/.+\\.js$": [
+        "ts-jest",
+        {
+          "tsconfig": {
+            "allowJs": true,
+            "module": "commonjs",
+            "moduleResolution": "node10"
+          }
+        }
+      ]
     },
+    "transformIgnorePatterns": [
+      "/node_modules/(?!@actions/)"
+    ],
     "coverageReporters": [
       "json-summary",
       "text",
@@ -66,16 +80,16 @@
     ]
   },
   "dependencies": {
-    "@actions/core": "^1.11.1",
-    "@actions/http-client": "^2.2.3",
-    "@actions/tool-cache": "^2.0.2"
+    "@actions/core": "^3.0.1",
+    "@actions/http-client": "^4.0.1",
+    "@actions/tool-cache": "^4.0.0"
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",
     "@types/jest": "^29.5.14",
-    "@types/node": "^20.19.43",
-    "@typescript-eslint/eslint-plugin": "^7.18.0",
-    "@typescript-eslint/parser": "^7.18.0",
+    "@types/node": "^24.19.2",
+    "@typescript-eslint/eslint-plugin": "^8.72.2",
+    "@typescript-eslint/parser": "^8.72.2",
     "@vercel/ncc": "^0.38.4",
     "eslint": "^8.57.1",
     "eslint-plugin-github": "^5.1.8",
