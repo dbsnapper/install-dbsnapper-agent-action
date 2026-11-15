@@ -39,10 +39,13 @@ Other runners and older versions fail with
 
 To resolve `latest`, the action asks the GitHub API for the newest release. It
 sends the optional `token` input with that one request to `api.github.com` and
-nowhere else; the default is the workflow's own token (`github.token`). Without
-a token GitHub allows 60 such requests per hour per IP address. When GitHub
-refuses the request (HTTP 403 or 429) the step fails with
-`… most likely the GitHub rate limit`: pin a version, which needs no lookup.
+nowhere else; on github.com the default is the workflow's own token
+(`github.token`). On a GitHub Enterprise server the default is no token, since
+that server's workflow token is not valid on `api.github.com`: pass a github.com
+token as `token`, or pin `version`. Without a token GitHub allows 60 such
+requests per hour per IP address. When GitHub refuses the request (HTTP 403
+or 429) the step fails with `… most likely the GitHub rate limit`: pin a
+version, which needs no lookup.
 
 ### Checksum verification
 

@@ -18,10 +18,12 @@ inputs:
   token:
     description:
       'GitHub token for the latest-release lookup on api.github.com (only
-      there); the default is the workflow token, which lifts the anonymous limit
-      of 60 lookups per hour'
+      there); the default is the workflow token on github.com, which lifts the
+      anonymous limit of 60 lookups per hour, and no token on other GitHub
+      servers'
     required: false
-    default: ${{ github.token }}
+    default:
+      ${{ github.server_url == 'https://github.com' && github.token || '' }}
 
 runs:
   using: node20

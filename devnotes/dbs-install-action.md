@@ -6,7 +6,7 @@ command · Z = UTC.
 - Finding: F15 (medium, agent distribution), plan §2.2 step 7.
 - Branch `dbs-install-action` from `main` d2e5b6f; committed as 6b88b0f and
   merged into `main` as a7a2099. No tag, no release.
-- Follow-up (IA1–IA5, lint, Dependabot): section
+- Follow-up (IA1–IA5, lint, Dependabot, then IA6 after its review): section
   [Follow-up](#follow-up-dbs-install-action-polish) at the end.
 
 ## Summary
@@ -356,3 +356,100 @@ agent's `--version` from the path it added.
 - **CI not run** (GitHub minutes capped until 12-01): `check-dist`,
   `Continuous Integration` and `Lint Codebase` run on the next push to `main`.
 - **Release** (Joe's call): a new tag and moving `v1`.
+- **IA7, IA8, IA9** from the second review
+  (`reports/review-dbs-install-action-polish.md`): not in this round, as the
+  conductor ordered.
+
+### Fix after review (IA6)
+
+State on 2026-11-15 06:00Z: done, waiting for review. Review
+`reports/review-dbs-install-action-polish.md` (verdict "merge: after IA6").
+
+- **What was wrong:** the `token` default was `${{ github.token }}` on every
+  GitHub server. On a GitHub Enterprise server that is the server's own job
+  token, which `api.github.com` refuses (HTTP 401), so the default
+  `version: latest` would fail on every run there [INFERENCE: reviewer's
+  finding; no Enterprise server to test on]. Before this branch the lookup was
+  anonymous and worked there.
+- **Fix in `action.yml`:** the default is now
+  `${{ github.server_url == 'https://github.com' && github.token || '' }}`, the
+  expression `actions/setup-node`, `setup-go` and `setup-python` use (per the
+  review's detail). On github.com: the job token, as before. Anywhere else: an
+  empty token, which the action already treats as an anonymous lookup (✅
+  `main.test.ts` live test with `token: ''`, and the end-to-end runs above with
+  `INPUT_TOKEN=`). The input's description says so.
+- **`README.md`** ("Token for `latest`"): the default applies on github.com; on
+  an Enterprise server pass a github.com token as `token`, or pin `version`.
+- **No code change, no rebuild:** `git status --short` lists only `action.yml`,
+  `README.md` and this file; `dist/` is untouched, so it still equals the fresh
+  build the review checked (4 of 4 files byte-identical at 4654633).
+
+Check of the expression (documented check, not a permanent test): the script
+below reads `inputs.token.default` from `action.yml` and evaluates it with
+GitHub's own expression evaluator, `@actions/expressions` 0.3.61 (npm, the
+package behind the Actions language service), with a stand-in job token.
+
+```js
+// /tmp/dbs-polish/ia6/check.mjs; npm install @actions/expressions@0.3.61 yaml
+import { readFileSync } from 'node:fs'
+import { parse } from 'yaml'
+import { Lexer, Parser, Evaluator, data } from '@actions/expressions'
+
+const raw = parse(readFileSync(process.argv[2], 'utf8')).inputs.token.default
+const expr = /^\$\{\{(.*)\}\}$/s.exec(raw.trim())[1]
+const TOKEN = 'job-token-placeholder'
+const cases = [
+  ['https://github.com', TOKEN],
+  ['https://ghe.example.com', ''],
+  ['https://acme.ghe.com', ''],
+  ['http://github.com', '']
+]
+let bad = 0
+for (const [serverUrl, want] of cases) {
+  const ast = new Parser(new Lexer(expr).lex().tokens, ['github'], []).parse()
+  const ctx = new data.Dictionary({
+    key: 'github',
+    value: new data.Dictionary(
+      { key: 'server_url', value: new data.StringData(serverUrl) },
+      { key: 'token', value: new data.StringData(TOKEN) }
+    )
+  })
+  const got = new Evaluator(ast, ctx).evaluate().coerceString()
+  if (got !== want) bad++
+  console.log(
+    got === want ? 'ok  ' : 'FAIL',
+    serverUrl,
+    '->',
+    got === TOKEN ? 'job token' : JSON.stringify(got)
+  )
+}
+process.exit(bad ? 1 : 0)
+```
+
+| `github.server_url`              | Before (4654633) | After        |
+| -------------------------------- | ---------------- | ------------ |
+| `https://github.com`             | ✅ job token     | ✅ job token |
+| `https://ghe.example.com`        | ❌ job token     | ✅ `""`      |
+| `https://acme.ghe.com` (tenant)  | ❌ job token     | ✅ `""`      |
+| `http://github.com` (look-alike) | ❌ job token     | ✅ `""`      |
+| exit code                        | 1 (1 of 4)       | 0 (4 of 4)   |
+
+- Run once on the edited `action.yml` and once on `git show 4654633:action.yml`.
+  The evaluator is the language service's, not the runner's; that the runner
+  computes the same is [INFERENCE: same expression language, and the three
+  official setup actions ship this default].
+- Prettier moved the default onto its own line (a plain YAML scalar, same value:
+  the script parses the file and prints the one-line expression).
+
+Runs after the fix:
+
+| Run                                                              | Result                                                     |
+| ---------------------------------------------------------------- | ---------------------------------------------------------- |
+| expression check above, after                                    | exit 0, 4 of 4                                             |
+| `npm run format:check` (after `prettier --write` on the 2 files) | exit 0                                                     |
+| markdownlint-cli 0.41.0, `README.md` and this file               | exit 0                                                     |
+| textlint 14 + terminology, `README.md` and this file             | exit 0                                                     |
+| lines over 80 characters in `action.yml` (`awk`)                 | 0 (the yamllint limit; yamllint itself not installed here) |
+
+- Not run: tests and the bundle (no code changed), the action on a real
+  Enterprise server (none available), CI (no push).
