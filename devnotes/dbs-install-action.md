@@ -650,3 +650,20 @@ Left, all development:
 - **CI not run** (no push): `check-dist`, `Continuous Integration` and
   `Lint Codebase` run on the next push to `main`, on Node 24.22.3 now.
 - **Release** (Joe's call): users get this only when `v1` moves.
+
+### Status (majors, 2026-11-15 17:45Z)
+
+- Work commit `14f9021` on `dbs-install-action-majors` (parent 887639a); this
+  status note is the commit after it. Not pushed, no tag, no release.
+- `dist/` equals a fresh build: a clone of `14f9021` in `/tmp`, `npm ci` (594
+  packages, exit 0) and `npm run bundle` (exit 0), 17:44Z: 4 of 4 files
+  byte-identical to the committed ones (`cmp`), clone clean afterwards (0 lines
+  in `git status --short`); `dist/index.js` SHA-256 starts `22b0106e4d8719bb`.
+- Ran: the 3 test files (26 passed), lint, format check, `tsc`, bundle,
+  `npm audit` before and after, end-to-end runs of the bundle for 5 cases (table
+  above). Privacy scan (`private-terms.ere`) and key-format scan: 0 and 0 on
+  every changed file except the bundle, where the plain `AKIA` substring appears
+  in base64 WebAssembly (2 lines in `index.js`, 1 in the map; 1 line before);
+  the full key pattern `AKIA[0-9A-Z]{16}` counts 0.
+- Not run: CI on GitHub (no push), the Mac gates (the conductor's).
+- Left: open items above.
