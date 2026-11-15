@@ -43,6 +43,11 @@ jobs:
           DEFAULT_BRANCH: main
           FILTER_REGEX_EXCLUDE: dist/**/*
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # actionlint 1.7.1 in super-linter v6 knows only node16/node20 and
+          # rejects action.yml's `using: node24` (GitHub runs it; actionlint
+          # accepts it from 1.7.8, super-linter v8.3.0). Drop this line after
+          # that bump. super-linter passes the value as one argument.
+          GITHUB_ACTIONS_COMMAND_ARGS: -ignore=invalid runner name "node24"
           # ESLint (TYPESCRIPT_ES) and Prettier check TypeScript with the
           # repository's own configuration. TYPESCRIPT_DEFAULT_STYLE, which
           # once turned ts-standard off, is ignored since super-linter v6.

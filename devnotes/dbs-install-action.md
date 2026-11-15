@@ -494,9 +494,14 @@ load1 18.1 (my mistake; I added a load check in front of every later run).
 | JSON `null` answer        | raw `Cannot read …` error | `Failed to resolve …: … returned no tag` (IA8) |
 
 - **IA7** (`src/util.ts`): a 401 when a token was sent says
-  `… answered HTTP 401: GitHub refused the token. Pin a version (version: 2.9.0) to skip this lookup, or pass a valid token (token input)`.
-  A 401 without a token (not expected from GitHub) keeps the plain message.
-  README "Token for `latest`" says the same.
+
+  ```text
+  … answered HTTP 401: GitHub refused the token. Pin a version (version: 2.9.0) to skip this lookup, or pass a valid token (token input)
+  ```
+
+  A 401 without a token (not expected from GitHub) keeps the plain message. The
+  readme section "Token for `latest`" says the same.
+
 - **IA8** (`src/util.ts`): the answer's `tag_name` is typed `unknown`; a
   missing, `null` or non-string tag fails with `returned no tag`, and a tag that
   does not match `VERSION_PATTERN` (the `version` input's pattern) fails with
@@ -543,7 +548,7 @@ What changed in the three runtime packages, from their `RELEASES.md` (toolkit
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `http-client` 2.2.3 → 4.0.1              | 3.0.0 Node 24 support; 3.0.1 adds `actions_orchestration_id/<id>` to the user agent when `ACTIONS_ORCHESTRATION_ID` is set; 3.0.2 and 4.0.1 undici 6; 4.0.0 ESM-only | User agent of the lookup and downloads gains that suffix on runners that set the variable [INFERENCE]; proxy, redirect and retry code: 0 changed lines in the diff besides header number-to-string handling |
 | `core` 1.11.1 → 3.0.1                    | 2.0.0 Node 24, http-client 3; 3.0.0 ESM-only; 3.0.1 undici bump                                                                                                      | `getInput`, `info`, `addPath`, `setFailed`: unchanged in the diff                                                                                                                                           |
-| `tool-cache` 2.0.2 → 4.0.0               | 3.0.0 core 2, exec 2, http-client 3, io 2 (semver 6 → 7); 4.0.0 ESM-only                                                                                             | `downloadTool` (3 tries, retries on 5xx, 408, 429), `extractTar`, `HTTPError`: unchanged in the diff; `cacheDir`/`find` not used (0 calls in `src/`)                                                        |
+| `tool-cache` 2.0.2 → 4.0.0               | 3.0.0 core 2, exec 2, http-client 3, io 2 (`semver` 6 → 7); 4.0.0 ESM-only                                                                                           | `downloadTool` (3 tries, retries on 5xx, 408, 429), `extractTar`, `HTTPError`: unchanged in the diff; `cacheDir`/`find` not used (0 calls in `src/`)                                                        |
 | `exec` 1.1.1 → 3.0.0, `io` 1.1.3 → 3.0.2 | ESM; `io` restores Node 20 `readlink` results for Windows junctions                                                                                                  | `tar` call unchanged; Windows not supported by the action                                                                                                                                                   |
 
 - The bundle's package list (`dist/licenses.txt`): `@fastify/busboy` gone, none
@@ -577,9 +582,9 @@ Left, all development:
   patterns.
 - **`prettier-eslint` 16 → 17:** ❌ left. 17.1.3 brings its own ESLint 10 and
   `@typescript-eslint/parser` 8 (still flagged through minimatch, as above), so
-  the count would not drop. No script uses it; only the devcontainer's VS Code
-  extension `rvest.vs-code-prettier-eslint` names it.
-- **jest chain (7 low):** unchanged; npm proposes jest 25 (a downgrade).
+  the count would not drop. No script uses it; only the devcontainer's Visual
+  Studio Code extension `rvest.vs-code-prettier-eslint` names it.
+- **Jest chain (7 low):** unchanged; npm proposes Jest 25 (a downgrade).
 
 ### Majors tests: before and after
 
@@ -601,7 +606,11 @@ Left, all development:
 ### Majors end-to-end: built `dist/index.js` on alfa (Linux arm64)
 
 `/tmp/dbs-iam/e2e.sh`, as in the polish round: per case a fresh directory,
-`env -i … INPUT_VERSION=$v INPUT_TOKEN=… RUNNER_TEMP=… RUNNER_TOOL_CACHE=… GITHUB_PATH=… node dist/index.js`
+
+```text
+env -i … INPUT_VERSION=$v INPUT_TOKEN=… RUNNER_TEMP=… RUNNER_TOOL_CACHE=… GITHUB_PATH=… node dist/index.js
+```
+
 (Node 24.22.3), then the agent's `--version` from the path the action added.
 17:31–17:38Z.
 
@@ -686,8 +695,13 @@ for Joe; keep the Jest hang fix on this branch.
     status below 500 other than 408 and 429; a partial file is deleted. Worst
     case for a dead connection: about 2 minutes (3 × 30 s + 2 × 10 s), then the
     step fails with
-    `Failed to download dbsnapper_…tar.gz from <url>: download stalled: no data for 30 seconds (3 attempts)`.
+
+    ```text
+    Failed to download dbsnapper_…tar.gz from <url>: download stalled: no data for 30 seconds (3 attempts)
+    ```
+
     `checksums.txt` failures keep their `Cannot verify …` message.
+
   - The same `http-client` timeout also applies to the `latest` lookup; that
     client is now disposed after its one request too.
   - Behind a proxy `http-client` uses a tunnel agent that `dispose()` does not
@@ -732,7 +746,11 @@ below started at load1 16.6, the guard read the load a moment earlier):
 
 - The end-to-end run hit a real stall: the first archive request got no data,
   and the step logged
-  `Downloading https://github.com/…/dbsnapper_2.9.0_linux_arm64.tar.gz failed: download stalled: no data for 30 seconds; trying again in 10 seconds`,
+
+  ```text
+  Downloading https://github.com/…/dbsnapper_2.9.0_linux_arm64.tar.gz failed: download stalled: no data for 30 seconds; trying again in 10 seconds
+  ```
+
   then the second attempt downloaded, verified and unpacked it, and the process
   exited on its own: 43 s for the whole run (17:56:23 to 17:57:06Z), against
   more than 2 minutes still running in the first-round stall.
