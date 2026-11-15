@@ -45,7 +45,9 @@ that server's workflow token is not valid on `api.github.com`: pass a github.com
 token as `token`, or pin `version`. Without a token GitHub allows 60 such
 requests per hour per IP address. When GitHub refuses the request (HTTP 403
 or 429) the step fails with `… most likely the GitHub rate limit`: pin a
-version, which needs no lookup.
+version, which needs no lookup. When GitHub refuses the token itself (HTTP 401:
+expired, revoked or mistyped) the step fails with `… GitHub refused the token`:
+pin a version, or pass a valid token.
 
 ### Checksum verification
 

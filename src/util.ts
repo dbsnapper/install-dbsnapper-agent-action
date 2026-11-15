@@ -25,8 +25,9 @@ function mapOS(ops: string): string {
   return mappings[ops] || ops
 }
 
+// Parsed from GitHub's answer, so nothing about its shape is guaranteed
 interface GithubReleaseResponse {
-  tag_name: string
+  tag_name?: unknown
 }
 
 export interface AgentRelease {
@@ -111,6 +112,14 @@ async function getLatestTag(token?: string): Promise<string> {
     throw latestLookupError(
       `${url}: ${error instanceof Error ? error.message : error}`
     )
+  } finally {
+    // Destroys the connection, also one http-client's timeout left half-closed
+    httpClient.dispose()
+  }
+  if (status === 401 && token) {
+    throw latestLookupError(
+      `${url} answered HTTP 401: GitHub refused the token. Pin a version (version: 2.9.0) to skip this lookup, or pass a valid token (token input)`
+    )
   }
   if (status === 403 || status === 429) {
     throw latestLookupError(
@@ -120,7 +129,7 @@ async function getLatestTag(token?: string): Promise<string> {
   if (status !== 200) {
     throw latestLookupError(`${url} answered HTTP ${status}`)
   }
-  let release: GithubReleaseResponse
+  let release: GithubReleaseResponse | null
   try {
     release = JSON.parse(body)
   } catch (error) {
@@ -128,8 +137,15 @@ async function getLatestTag(token?: string): Promise<string> {
       `${url} returned no JSON (${error instanceof Error ? error.message : error})`
     )
   }
-  if (!release.tag_name) {
+  const tag = release?.tag_name
+  if (!tag) {
     throw latestLookupError(`${url} returned no tag`)
   }
-  return `v${stripLeadingV(release.tag_name)}`
+  // GitHub's answer gets the same check as the version input
+  if (typeof tag !== 'string' || !VERSION_PATTERN.test(tag)) {
+    throw latestLookupError(
+      `${url} returned the tag ${JSON.stringify(tag)}, which is not a version number`
+    )
+  }
+  return `v${stripLeadingV(tag)}`
 }

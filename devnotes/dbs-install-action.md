@@ -453,3 +453,299 @@ Runs after the fix:
 
 - Not run: tests and the bundle (no code changed), the action on a real
   Enterprise server (none available), CI (no push).
+
+## Follow-up: dbs-install-action-majors
+
+Branch `dbs-install-action-majors` from `main` 887639a (= release `v1.1.0`).
+Handoff `handoff/dbs-install-action-majors.md` (clonit-meta 631a840), decision
+`install action: v1 on 2.x, majors next` (Joe, 2026-11-15). Findings IA7–IA9
+from `reports/review-dbs-install-action-polish.md`. No push, no tag, no release.
+
+Legend:
+
+- **Runtime** = code in the bundle `dist/index.js`, which runs in users' jobs;
+  **development** = lint, test and build tools only.
+- **ESM-only** = a package that can only be loaded with `import`, not with
+  CommonJS `require()`.
+- ✅ done and checked · ❌ not done (reason given) · [INFERENCE] = read, not
+  run.
+
+State on 2026-11-15 (times in the tables): done, waiting for review. Every run
+below ran on alfa (Linux arm64) with Node 24.22.3 (mise), under
+`flock /tmp/dbs-heavy.lock nice -n 19`, one at a time; each started at load1 <
+16 and memory PSI avg60 < 1, except one `npx jest` at 17:24Z that started at
+load1 18.1 (my mistake; I added a load check in front of every later run).
+
+### Majors changes
+
+| Area                      | Before                    | After                                          |
+| ------------------------- | ------------------------- | ---------------------------------------------- |
+| `@actions/core`           | 1.11.1                    | 3.0.1                                          |
+| `@actions/http-client`    | 2.2.3 (undici 5.29.0)     | 4.0.1 (undici 6.29.1)                          |
+| `@actions/tool-cache`     | 2.0.2                     | 4.0.0 (`@actions/exec` 3, `io` 3)              |
+| `action.yml` `runs.using` | `node20`                  | `node24` (IA9)                                 |
+| `.node-version` (CI)      | 20.6.0                    | 24.22.3 (newest 24.x, 2026-11-10)              |
+| `package.json` engines    | `>=20`                    | `>=24`                                         |
+| devcontainer image        | `typescript-node:20`      | `typescript-node:24`                           |
+| `@types/node`             | 20.19.43                  | 24.19.2                                        |
+| `@typescript-eslint/*`    | 7.18.0                    | 8.72.2                                         |
+| HTTP 401 on the lookup    | `… answered HTTP 401`     | `… GitHub refused the token. Pin a …` (IA7)    |
+| Tag GitHub answers        | used as is                | same format check as `version` (IA8)           |
+| JSON `null` answer        | raw `Cannot read …` error | `Failed to resolve …: … returned no tag` (IA8) |
+
+- **IA7** (`src/util.ts`): a 401 when a token was sent says
+  `… answered HTTP 401: GitHub refused the token. Pin a version (version: 2.9.0) to skip this lookup, or pass a valid token (token input)`.
+  A 401 without a token (not expected from GitHub) keeps the plain message.
+  README "Token for `latest`" says the same.
+- **IA8** (`src/util.ts`): the answer's `tag_name` is typed `unknown`; a
+  missing, `null` or non-string tag fails with `returned no tag`, and a tag that
+  does not match `VERSION_PATTERN` (the `version` input's pattern) fails with
+  `returned the tag "…", which is not a version number`, before any download.
+  The token mask (`core.setSecret`) the review also suggested is not in the
+  handoff: ❌ not done.
+- **ESM-only packages.** `@actions/core` 3, `http-client` 4 and `tool-cache` 4
+  are ESM-only (their `package.json`: `"type": "module"`, exports with only an
+  `import` condition). What that needed here:
+  - `tsconfig.json`: `module: preserve`, `moduleResolution: bundler` (was
+    `NodeNext`). ncc failed with `Package path . is not exported` before; now
+    TypeScript keeps the `import`s and ncc (webpack) resolves them. `src/`
+    imports unchanged; the bundle is still one CommonJS `dist/index.js`.
+  - Jest (CommonJS): `script/jest-resolver.cjs` resolves `@actions/*`, and only
+    those, with the `import` condition, and `package.json` lets ts-jest turn
+    their files into CommonJS (`transformIgnorePatterns`, a `.js` transform).
+    Asking for `import` for every package broke Jest's own `dedent` (an `.mjs`).
+    No test needed a change for this.
+  - ❌ Not chosen: making the whole project ESM (`"type": "module"`), as
+    GitHub's current action template does. Tests spy on `core`, `tc` and `os`
+    with `jest.spyOn`, which ESM namespaces do not allow; they would all move to
+    `jest.unstable_mockModule`.
+- **`@typescript-eslint` 8:** 3 rules the config named were removed in v8
+  (`func-call-spacing`, `semi`, `type-annotation-spacing`, all layout rules that
+  Prettier enforces); I took them and the already-`off`
+  `space-before-function-paren` out of `.github/linters/.eslintrc.yml`. 0
+  changes in `src/` or `__tests__/` for lint (`npm run lint` exit 0). The second
+  generation of these packages that `eslint-plugin-github` brought is gone:
+  `npm ls @typescript-eslint/parser` shows 8.72.2 once, plus 6.21.0 under
+  `prettier-eslint`.
+- **Jest did not exit (found here, also on `main`).** The live `latest` test
+  sends a HEAD request and never read the response, so its socket kept Jest
+  alive: `npx jest __tests__/main.test.ts` printed `Jest did not exit` and was
+  stopped by `timeout 90` (exit 124) on a clean copy of 887639a too (Node
+  24.22.3), and a 6-line script with only that HEAD request hung the same way
+  until it read the body (then exit 0 in 302 ms). The test now reads the body.
+  CI runs `npx jest` without `--forceExit`, so on the next push the `Test` step
+  would have hung [INFERENCE: not run on GitHub].
+
+What changed in the three runtime packages, from their `RELEASES.md` (toolkit
+`main`) and a diff of the published `lib/` files, old against new:
+
+| Package (old → new)                      | Changes                                                                                                                                                              | Effect on this action                                                                                                                                                                                       |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `http-client` 2.2.3 → 4.0.1              | 3.0.0 Node 24 support; 3.0.1 adds `actions_orchestration_id/<id>` to the user agent when `ACTIONS_ORCHESTRATION_ID` is set; 3.0.2 and 4.0.1 undici 6; 4.0.0 ESM-only | User agent of the lookup and downloads gains that suffix on runners that set the variable [INFERENCE]; proxy, redirect and retry code: 0 changed lines in the diff besides header number-to-string handling |
+| `core` 1.11.1 → 3.0.1                    | 2.0.0 Node 24, http-client 3; 3.0.0 ESM-only; 3.0.1 undici bump                                                                                                      | `getInput`, `info`, `addPath`, `setFailed`: unchanged in the diff                                                                                                                                           |
+| `tool-cache` 2.0.2 → 4.0.0               | 3.0.0 core 2, exec 2, http-client 3, io 2 (semver 6 → 7); 4.0.0 ESM-only                                                                                             | `downloadTool` (3 tries, retries on 5xx, 408, 429), `extractTar`, `HTTPError`: unchanged in the diff; `cacheDir`/`find` not used (0 calls in `src/`)                                                        |
+| `exec` 1.1.1 → 3.0.0, `io` 1.1.3 → 3.0.2 | ESM; `io` restores Node 20 `readlink` results for Windows junctions                                                                                                  | `tar` call unchanged; Windows not supported by the action                                                                                                                                                   |
+
+- The bundle's package list (`dist/licenses.txt`): `@fastify/busboy` gone, none
+  added (8 packages left). Hosts in `dist/index.js`: 1 new address, in a comment
+  of undici's multipart parser (`andreubotella.github.io`), 2 old ones gone; no
+  new host is contacted [INFERENCE: comment only].
+- `npm audit`: 3 runtime advisories → 0. The undici code the review found
+  uncalled (proxy helper) is still in the bundle and still uncalled [INFERENCE:
+  not re-read].
+
+### `npm audit` before and after
+
+`npm audit --package-lock-only`, on 887639a and on the working tree:
+
+| Scope                  | Before (887639a)               | After                          |
+| ---------------------- | ------------------------------ | ------------------------------ |
+| Runtime (`--omit=dev`) | 3 (2 high, 1 moderate)         | **0**                          |
+| All (runtime + dev)    | 18 (6 high, 5 moderate, 7 low) | 15 (4 high, 4 moderate, 7 low) |
+| Development only       | 15                             | 15                             |
+
+Left, all development:
+
+- **minimatch chain (8 entries: `@typescript-eslint/*` 5, `typescript-eslint`,
+  minimatch, `prettier-eslint`):** ❌ not fixable by a major. The advisory needs
+  minimatch ≥ 11.0.1; the newest `@typescript-eslint/typescript-estree` (8.72.2,
+  also the newest 8.x and `latest`) asks for `^10.2.2`, so npm's only "fix" is a
+  downgrade to 6.15.0. Only an `overrides` entry forcing minimatch 11 would
+  clear it (the parser calls minimatch only for `projectService`, which this
+  config does not use [INFERENCE: read in `typescript-estree`]). Not done: a pin
+  outside the dependent's range, for a ReDoS in a lint tool fed by our own
+  patterns.
+- **`prettier-eslint` 16 → 17:** ❌ left. 17.1.3 brings its own ESLint 10 and
+  `@typescript-eslint/parser` 8 (still flagged through minimatch, as above), so
+  the count would not drop. No script uses it; only the devcontainer's VS Code
+  extension `rvest.vs-code-prettier-eslint` names it.
+- **jest chain (7 low):** unchanged; npm proposes jest 25 (a downgrade).
+
+### Majors tests: before and after
+
+| Run (Node 24.22.3)                                               | Result                                                      |
+| ---------------------------------------------------------------- | ----------------------------------------------------------- |
+| After, `timeout 150 npx jest` (3 files, CI's command), 17:30Z    | exit 0: 26 passed, 0 failed; Jest exited by itself          |
+| Clean copy of 887639a, `npx jest __tests__/main.test.ts`, 17:19Z | 6 passed, then `Jest did not exit`, exit 124 (`timeout 90`) |
+| 887639a sources + the new `util.test.ts`, 17:31Z                 | exit 1: 12 passed, 7 failed (the 7 new tests: IA7 1, IA8 6) |
+| `npm run lint`                                                   | exit 0                                                      |
+| `npm run format:check`                                           | exit 0                                                      |
+| `npx tsc --noEmit -p .`                                          | exit 0                                                      |
+| `npm run bundle`                                                 | exit 0; `dist/` rebuilt (4 files)                           |
+
+- New tests: `util.test.ts` 401 (1), latest tag not a version number (5 tags:
+  `release-3`, `vv2.9.0`, `../x`, `v2.9.0/../../x`, `v2.9.0?x`), JSON `null`
+  (1).
+- Coverage after: `src/` 94.56 % of statements (`util.ts` 95.55 %).
+
+### Majors end-to-end: built `dist/index.js` on alfa (Linux arm64)
+
+`/tmp/dbs-iam/e2e.sh`, as in the polish round: per case a fresh directory,
+`env -i … INPUT_VERSION=$v INPUT_TOKEN=… RUNNER_TEMP=… RUNNER_TOOL_CACHE=… GITHUB_PATH=… node dist/index.js`
+(Node 24.22.3), then the agent's `--version` from the path the action added.
+17:31–17:38Z.
+
+| `version` (token)        | Result                                                                                                |
+| ------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `latest` (none)          | ✅ v2.9.0, `Verified SHA-256 of dbsnapper_2.9.0_linux_arm64.tar.gz`, exit 0, agent 2.9.0 (twice)      |
+| `v2.9.0` (none)          | ✅ verified, exit 0, agent 2.9.0                                                                      |
+| `2.7.1` (none)           | ✅ verified, exit 0, agent 2.7.1 (2nd run, 17:38Z; 1st run: see below)                                |
+| `2.9` (none)             | ✅ refused: `Invalid version "2.9": …`, exit 1, nothing on `PATH`                                     |
+| `latest` (made-up token) | ✅ `… answered HTTP 401: GitHub refused the token. Pin a version …`, exit 1, nothing downloaded (IA7) |
+
+- **1st `2.7.1` run (17:31Z):** the archive request stalled; after 3 minutes
+  `Request timeout: …`, `Waiting 20 seconds before trying again`, the 2nd try
+  downloaded, verified and unpacked it (agent 2.7.1 on `PATH`). The retry works
+  with the new `tool-cache`. But the process did not exit: still running 2
+  minutes after the install, holding one connection to GitHub in `FIN-WAIT-1`
+  (`ss -tnp`); I stopped it (`kill <pid>`, exit 143). See open items.
+
+### Majors decisions
+
+- `@actions/http-client` 4.x as the handoff says, although 3.0.2 (with `core`
+  2.0.3 and `tool-cache` 3.0.1, still CommonJS) also clears the 3 runtime
+  advisories (npm's range for http-client is `2.2.0 - 3.0.1`). The 2.x/3.x line
+  gets no more releases (newest 2026-01-27), and the ESM switch is a config
+  change here, not a code change.
+- Keep the project CommonJS with bundler resolution and a small Jest resolver,
+  rather than converting it to ESM (reason above).
+- `.node-version` set to the exact newest 24.x (24.22.3), not `24`: same style
+  as before, and the bundle build stays reproducible.
+- The 401 hint only when a token was sent: an anonymous request has no token to
+  blame.
+- Took the `@typescript-eslint` 8 major: no lint churn in `src/`, one fewer copy
+  of the lint stack. Left `prettier-eslint` and minimatch (above).
+
+### Open items (majors)
+
+- **Step can hang after a stalled download** (new, LOW, also on `main`
+  [INFERENCE: the timeout code in `http-client` has 0 changed lines between
+  2.2.3 and 4.0.1]): on a request timeout `http-client` ends the socket but does
+  not destroy it, so a dead connection keeps Node running until the kernel gives
+  up on it (about 15 minutes with Linux defaults [INFERENCE]), and the step with
+  it. Fix options: `process.exit()` after `run()` in `src/index.ts`, or a
+  shorter `socketTimeout`; 30 min [estimate: one line, one test, rebuild].
+- **Token mask** (`core.setSecret`, review IA8): not in this handoff.
+- **minimatch override** (8 dev advisories): Joe's call, see above.
+- **CI not run** (no push): `check-dist`, `Continuous Integration` and
+  `Lint Codebase` run on the next push to `main`, on Node 24.22.3 now.
+- **Release** (Joe's call): users get this only when `v1` moves.
+
+### Status (majors, 2026-11-15 17:45Z)
+
+- Work commit `14f9021` on `dbs-install-action-majors` (parent 887639a); this
+  status note is the commit after it. Not pushed, no tag, no release.
+- `dist/` equals a fresh build: a clone of `14f9021` in `/tmp`, `npm ci` (594
+  packages, exit 0) and `npm run bundle` (exit 0), 17:44Z: 4 of 4 files
+  byte-identical to the committed ones (`cmp`), clone clean afterwards (0 lines
+  in `git status --short`); `dist/index.js` SHA-256 starts `22b0106e4d8719bb`.
+- Ran: the 3 test files (26 passed), lint, format check, `tsc`, bundle,
+  `npm audit` before and after, end-to-end runs of the bundle for 5 cases (table
+  above). Privacy scan (`private-terms.ere`) and key-format scan: 0 and 0 on
+  every changed file except the bundle, where the plain `AKIA` substring appears
+  in base64 WebAssembly (2 lines in `index.js`, 1 in the map; 1 line before);
+  the full key pattern `AKIA[0-9A-Z]{16}` counts 0.
+- Not run: CI on GitHub (no push), the Mac gates (the conductor's).
+- Left: open items above.
+
+### Fixes after the review stop (majors)
+
+Conductor's decisions on the stop at `eaa6d76`: (1) fix the stalled download
+now, (3) mask the token, (2) leave the minimatch pin and `prettier-eslint` 17
+for Joe; keep the Jest hang fix on this branch.
+
+- **(1) Stalled download** (the open item above). `src/download.ts` replaces
+  `tc.downloadTool` for the archive and `checksums.txt`; `tool-cache` is still
+  used for `extractTar`.
+  - One timer per attempt, restarted by every chunk received. After 30 s without
+    data it destroys the attempt's connections (`HttpClient.dispose()`, which
+    destroys the client's own agent, and the response stream) and the attempt
+    fails with `download stalled: no data for 30 seconds`. The client is
+    disposed after every attempt, success or not, so no socket stays behind.
+  - Retries as `tool-cache` did: 3 attempts, 10 s apart, no retry on an HTTP
+    status below 500 other than 408 and 429; a partial file is deleted. Worst
+    case for a dead connection: about 2 minutes (3 × 30 s + 2 × 10 s), then the
+    step fails with
+    `Failed to download dbsnapper_…tar.gz from <url>: download stalled: no data for 30 seconds (3 attempts)`.
+    `checksums.txt` failures keep their `Cannot verify …` message.
+  - The same `http-client` timeout also applies to the `latest` lookup; that
+    client is now disposed after its one request too.
+  - Behind a proxy `http-client` uses a tunnel agent that `dispose()` does not
+    destroy: a stall mid-file is still cut (the response stream is destroyed), a
+    stall before the answer ends with `http-client`'s own timeout (35 s here)
+    and may leave that one half-closed socket [INFERENCE: read in `http-client`,
+    no proxy to test with].
+  - Before, for the record: `tc.downloadTool` (tool-cache 4.0.0) against a local
+    server that stops after 5 of 100 bytes had not settled after 45 s (throwaway
+    script `/tmp/dbs-iam/stall-probe.mjs`, `timeout 45`, exit 124, "still
+    waiting" at 10, 20, 30 and 40 s).
+- **(3) Token mask:** `core.setSecret(token)` when the token is not empty
+  (`src/main.ts`), so a token written literally into a workflow is masked too;
+  the runner already masks the job token and secrets.
+- **(2) Left for Joe**, development only, nothing in the bundle: the minimatch
+  `overrides` pin (8 advisories) and `prettier-eslint` 17 (no audit gain), as
+  described above.
+- **Jest hang** (the unread HEAD response): fixed here, also present on `main`
+  (887639a), as described above.
+
+New tests:
+
+| Test                                                                      | What it proves                                                                                                      |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `download.test.ts`: server stops sending before the answer / mid-file (2) | fails in < 3 s with `download stalled …(2 attempts)`, 2 requests, every server-side connection closes, no file left |
+| `download.test.ts`: full answer; HTTP 404                                 | file written under `RUNNER_TEMP`; 404 fails after 1 request with its status                                         |
+| `main.test.ts`: masks the token (with / without a token)                  | `setSecret` called once with the token; not called for an empty one                                                 |
+| `main.test.ts`: archive download stalls                                   | the step fails with `Failed to download <archive> from <url>: download stalled …`, nothing unpacked                 |
+
+- The download tests listen on `127.0.0.1`, port from `INSTALL_ACTION_TEST_PORT`
+  (0 = the kernel picks one); on alfa I ran them on 30410 (my block).
+
+Runs (Node 24.22.3, same load brake; one more slip: the 17:53Z run of the checks
+below started at load1 16.6, the guard read the load a moment earlier):
+
+| Run                                              | Result                                                                           |
+| ------------------------------------------------ | -------------------------------------------------------------------------------- |
+| `npm run bundle`, 17:54Z                         | exit 0; `dist/` rebuilt                                                          |
+| `npm run lint` / `format:check` / `tsc --noEmit` | exit 0 / 0 / 0                                                                   |
+| `timeout 150 npx jest` (4 files), 17:55Z         | exit 0: 33 passed, 0 failed; Jest exited by itself; `download.ts` 100 % of lines |
+| End-to-end `latest` (bundle), 17:56–17:57Z       | ✅ exit 0, agent 2.9.0, verified; see below                                      |
+
+- The end-to-end run hit a real stall: the first archive request got no data,
+  and the step logged
+  `Downloading https://github.com/…/dbsnapper_2.9.0_linux_arm64.tar.gz failed: download stalled: no data for 30 seconds; trying again in 10 seconds`,
+  then the second attempt downloaded, verified and unpacked it, and the process
+  exited on its own: 43 s for the whole run (17:56:23 to 17:57:06Z), against
+  more than 2 minutes still running in the first-round stall.
+
+### Status (majors, after the fixes, 2026-11-15 18:01Z)
+
+- Work commit `d98a4f2` (stall fix, token mask, `dist/`), on `eaa6d76`; this
+  status note is the commit after it. No push by me, no tag, no release.
+- `dist/` equals a fresh build: a clone of `d98a4f2` in `/tmp`, `npm ci` (594
+  packages, exit 0) and `npm run bundle` (exit 0), 17:58Z: 4 of 4 files
+  byte-identical (`cmp`), clone clean afterwards (0 lines in
+  `git status --short`); `dist/index.js` SHA-256 starts `bc761e147445a810`.
+- Privacy scan and key-format scan (full patterns) on the 8 changed files: 0 and
+  0 each.
+- Open: the minimatch pin and `prettier-eslint` 17 (Joe); the proxy case of the
+  stall fix ([INFERENCE] above); CI runs on the merge to `main`.
