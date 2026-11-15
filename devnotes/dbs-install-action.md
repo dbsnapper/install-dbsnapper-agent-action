@@ -736,3 +736,16 @@ below started at load1 16.6, the guard read the load a moment earlier):
   then the second attempt downloaded, verified and unpacked it, and the process
   exited on its own: 43 s for the whole run (17:56:23 to 17:57:06Z), against
   more than 2 minutes still running in the first-round stall.
+
+### Status (majors, after the fixes, 2026-11-15 18:01Z)
+
+- Work commit `d98a4f2` (stall fix, token mask, `dist/`), on `eaa6d76`; this
+  status note is the commit after it. No push by me, no tag, no release.
+- `dist/` equals a fresh build: a clone of `d98a4f2` in `/tmp`, `npm ci` (594
+  packages, exit 0) and `npm run bundle` (exit 0), 17:58Z: 4 of 4 files
+  byte-identical (`cmp`), clone clean afterwards (0 lines in
+  `git status --short`); `dist/index.js` SHA-256 starts `bc761e147445a810`.
+- Privacy scan and key-format scan (full patterns) on the 8 changed files: 0 and
+  0 each.
+- Open: the minimatch pin and `prettier-eslint` 17 (Joe); the proxy case of the
+  stall fix ([INFERENCE] above); CI runs on the merge to `main`.
