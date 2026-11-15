@@ -32,10 +32,11 @@ let downloadToolMock: jest.SpyInstance
 let extractTarMock: jest.SpyInstance
 let addPathMock: jest.SpyInstance
 
-function useInput(version: string): void {
+function useInput(version: string, token = 'workflow-token'): void {
+  const inputs: Record<string, string> = { version, token }
   jest
     .spyOn(core, 'getInput')
-    .mockImplementation((name: string) => (name === 'version' ? version : ''))
+    .mockImplementation((name: string) => inputs[name] ?? '')
 }
 
 // Serves the archive and, unless `checksums` is undefined, a checksums file
@@ -85,6 +86,11 @@ describe('action', () => {
     expect(setFailedMock).not.toHaveBeenCalled()
     expect(extractTarMock).toHaveBeenCalledWith(archivePath)
     expect(addPathMock).toHaveBeenCalledWith('/path/to/agent')
+    // The token goes only to api.github.com, never with release downloads
+    expect(downloadToolMock.mock.calls).toEqual([
+      [ARCHIVE_URL],
+      [CHECKSUMS_URL]
+    ])
   })
 
   it('fails without unpacking when the archive does not match its checksum', async () => {
@@ -126,9 +132,32 @@ describe('action', () => {
     expect(addPathMock).not.toHaveBeenCalled()
   })
 
-  // Talks to the real GitHub API and release downloads (read-only).
+  it('names the release and the file when the release has no archive for this runner', async () => {
+    useInput('v2.9.0')
+    jest.spyOn(os, 'platform').mockReturnValue('darwin')
+    jest.spyOn(os, 'arch').mockReturnValue('arm64')
+    serveRelease(`${ARCHIVE_SHA256}  ${ARCHIVE_NAME}\n`)
+
+    await main.run()
+
+    expect(setFailedMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Release v2.9.0 has no file dbsnapper_2.9.0_darwin_arm64.tar.gz'
+      )
+    )
+    expect(setFailedMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'supports Linux runners (x64, arm64) and DBSnapper Agent 2.7.1 or newer'
+      )
+    )
+    expect(extractTarMock).not.toHaveBeenCalled()
+    expect(addPathMock).not.toHaveBeenCalled()
+  })
+
+  // Talks to the real GitHub API (anonymously: no real token in tests) and
+  // release downloads (read-only).
   it('latest downloads the archive of the newest full release, which exists', async () => {
-    useInput('latest')
+    useInput('latest', '')
     const requested: string[] = []
     downloadToolMock.mockImplementation(async (url: string) => {
       requested.push(url)

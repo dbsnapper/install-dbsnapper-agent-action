@@ -15,6 +15,15 @@ inputs:
       the newest release that is not a pre-release'
     required: false
     default: latest
+  token:
+    description:
+      'GitHub token for the latest-release lookup on api.github.com (only
+      there); the default is the workflow token on github.com, which lifts the
+      anonymous limit of 60 lookups per hour, and no token on other GitHub
+      servers'
+    required: false
+    default:
+      ${{ github.server_url == 'https://github.com' && github.token || '' }}
 
 runs:
   using: node20

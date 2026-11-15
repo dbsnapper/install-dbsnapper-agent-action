@@ -16,10 +16,12 @@ part of a GitHub Actions workflow.
 The action takes an optional `version` input that specifies the version of the
 Agent to install.
 
-| `version`                    | What gets installed                                                                    |
-| ---------------------------- | -------------------------------------------------------------------------------------- |
-| `latest` (default) or empty  | the newest published release that is **not a pre-release** (GitHub's "latest release") |
-| `2.9.0` or `v2.9.0` (pinned) | exactly that release                                                                   |
+| `version`                    | What gets installed                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------------------- |
+| `latest` (default) or empty  | the newest published release that is **not a prerelease** (GitHub's "latest release") |
+| `2.9.0` or `v2.9.0` (pinned) | exactly that release                                                                  |
+
+Any other `version` fails the step.
 
 ```yaml
 steps:
@@ -28,6 +30,22 @@ steps:
     with:
       version: latest
 ```
+
+Supported: Linux runners (x64 and arm64) and DBSnapper Agent 2.7.1 or newer.
+Other runners and older versions fail with
+`Release … has no file … (HTTP 404 …)`.
+
+### Token for `latest`
+
+To resolve `latest`, the action asks the GitHub API for the newest release. It
+sends the optional `token` input with that one request to `api.github.com` and
+nowhere else; on github.com the default is the workflow's own token
+(`github.token`). On a GitHub Enterprise server the default is no token, since
+that server's workflow token is not valid on `api.github.com`: pass a github.com
+token as `token`, or pin `version`. Without a token GitHub allows 60 such
+requests per hour per IP address. When GitHub refuses the request (HTTP 403
+or 429) the step fails with `… most likely the GitHub rate limit`: pin a
+version, which needs no lookup.
 
 ### Checksum verification
 
