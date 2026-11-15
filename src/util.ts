@@ -112,6 +112,9 @@ async function getLatestTag(token?: string): Promise<string> {
     throw latestLookupError(
       `${url}: ${error instanceof Error ? error.message : error}`
     )
+  } finally {
+    // Destroys the connection, also one http-client's timeout left half-closed
+    httpClient.dispose()
   }
   if (status === 401 && token) {
     throw latestLookupError(

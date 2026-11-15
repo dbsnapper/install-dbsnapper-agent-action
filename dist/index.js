@@ -32260,6 +32260,7 @@ function file_command_prepareKeyValueMessage(key, value) {
 //# sourceMappingURL=file-command.js.map
 ;// CONCATENATED MODULE: external "path"
 const external_path_namespaceObject = require("path");
+var external_path_default = /*#__PURE__*/__nccwpck_require__.n(external_path_namespaceObject);
 // EXTERNAL MODULE: external "http"
 var external_http_ = __nccwpck_require__(8611);
 var external_http_namespaceObject = /*#__PURE__*/__nccwpck_require__.t(external_http_, 2);
@@ -33801,7 +33802,7 @@ function mv(source_1, dest_1) {
  */
 function rmRF(inputPath) {
     return io_awaiter(this, void 0, void 0, function* () {
-        if (IS_WINDOWS) {
+        if (ioUtil.IS_WINDOWS) {
             // Check for invalid characters
             // https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file
             if (/[*"<>|]/.test(inputPath)) {
@@ -33810,7 +33811,7 @@ function rmRF(inputPath) {
         }
         try {
             // note if path does not exist, error is silent
-            yield rm(inputPath, {
+            yield ioUtil.rm(inputPath, {
                 force: true,
                 maxRetries: 3,
                 recursive: true,
@@ -34796,7 +34797,7 @@ function exportVariable(name, val) {
  * ```
  */
 function core_setSecret(secret) {
-    issueCommand('add-mask', {}, secret);
+    command_issueCommand('add-mask', {}, secret);
 }
 /**
  * Prepends inputPath to the PATH (for this action and future actions)
@@ -35162,7 +35163,7 @@ var retry_helper_awaiter = (undefined && undefined.__awaiter) || function (thisA
 /**
  * Internal class for retries
  */
-class RetryHelper {
+class retry_helper_RetryHelper {
     constructor(maxAttempts, minSeconds, maxSeconds) {
         if (maxAttempts < 1) {
             throw new Error('max attempts should be greater than or equal to 1');
@@ -35186,11 +35187,11 @@ class RetryHelper {
                     if (isRetryable && !isRetryable(err)) {
                         throw err;
                     }
-                    info(err.message);
+                    core.info(err.message);
                 }
                 // Sleep
                 const seconds = this.getSleepAmount();
-                info(`Waiting ${seconds} seconds before trying again`);
+                core.info(`Waiting ${seconds} seconds before trying again`);
                 yield this.sleep(seconds);
                 attempt++;
             }
@@ -35254,10 +35255,10 @@ const userAgent = 'actions/tool-cache';
  */
 function downloadTool(url, dest, auth, headers) {
     return tool_cache_awaiter(this, void 0, void 0, function* () {
-        dest = dest || external_path_namespaceObject.join(_getTempDirectory(), external_crypto_namespaceObject.randomUUID());
-        yield mkdirP(external_path_namespaceObject.dirname(dest));
-        core_debug(`Downloading ${url}`);
-        core_debug(`Destination ${dest}`);
+        dest = dest || path.join(_getTempDirectory(), crypto.randomUUID());
+        yield io.mkdirP(path.dirname(dest));
+        core.debug(`Downloading ${url}`);
+        core.debug(`Destination ${dest}`);
         const maxAttempts = 3;
         const minSeconds = _getGlobal('TEST_DOWNLOAD_TOOL_RETRY_MIN_SECONDS', 10);
         const maxSeconds = _getGlobal('TEST_DOWNLOAD_TOOL_RETRY_MAX_SECONDS', 20);
@@ -35280,15 +35281,15 @@ function downloadTool(url, dest, auth, headers) {
 }
 function downloadToolAttempt(url, dest, auth, headers) {
     return tool_cache_awaiter(this, void 0, void 0, function* () {
-        if (external_fs_namespaceObject.existsSync(dest)) {
+        if (fs.existsSync(dest)) {
             throw new Error(`Destination file path ${dest} already exists`);
         }
         // Get the response headers
-        const http = new lib_HttpClient(userAgent, [], {
+        const http = new httpm.HttpClient(userAgent, [], {
             allowRetries: false
         });
         if (auth) {
-            core_debug('set auth');
+            core.debug('set auth');
             if (headers === undefined) {
                 headers = {};
             }
@@ -35297,29 +35298,29 @@ function downloadToolAttempt(url, dest, auth, headers) {
         const response = yield http.get(url, headers);
         if (response.message.statusCode !== 200) {
             const err = new HTTPError(response.message.statusCode);
-            core_debug(`Failed to download from "${url}". Code(${response.message.statusCode}) Message(${response.message.statusMessage})`);
+            core.debug(`Failed to download from "${url}". Code(${response.message.statusCode}) Message(${response.message.statusMessage})`);
             throw err;
         }
         // Download the response body
-        const pipeline = external_util_.promisify(external_stream_namespaceObject.pipeline);
+        const pipeline = util.promisify(stream.pipeline);
         const responseMessageFactory = _getGlobal('TEST_DOWNLOAD_TOOL_RESPONSE_MESSAGE_FACTORY', () => response.message);
         const readStream = responseMessageFactory();
         let succeeded = false;
         try {
-            yield pipeline(readStream, external_fs_namespaceObject.createWriteStream(dest));
-            core_debug('download complete');
+            yield pipeline(readStream, fs.createWriteStream(dest));
+            core.debug('download complete');
             succeeded = true;
             return dest;
         }
         finally {
             // Error, delete dest before retry
             if (!succeeded) {
-                core_debug('download failed');
+                core.debug('download failed');
                 try {
-                    yield rmRF(dest);
+                    yield io.rmRF(dest);
                 }
                 catch (err) {
-                    core_debug(`Failed to delete '${dest}'. ${err.message}`);
+                    core.debug(`Failed to delete '${dest}'. ${err.message}`);
                 }
             }
         }
@@ -35866,6 +35867,105 @@ async function verifyChecksum(archivePath, archiveName, checksums) {
     }
 }
 
+;// CONCATENATED MODULE: external "stream/promises"
+const promises_namespaceObject = require("stream/promises");
+;// CONCATENATED MODULE: external "timers/promises"
+const external_timers_promises_namespaceObject = require("timers/promises");
+;// CONCATENATED MODULE: ./src/download.ts
+
+
+
+
+
+
+
+
+
+const USER_AGENT = 'dbsnapper-install-gh-action';
+class DownloadError extends Error {
+    httpStatusCode;
+    constructor(message, httpStatusCode) {
+        super(message);
+        this.httpStatusCode = httpStatusCode;
+        this.name = 'DownloadError';
+    }
+}
+// Like tool-cache: client errors other than 408 and 429 are final
+function isRetryable(error) {
+    const status = error instanceof DownloadError ? error.httpStatusCode : 0;
+    return !status || status >= 500 || status === 408 || status === 429;
+}
+/**
+ * Downloads `url` to a new file under RUNNER_TEMP and returns its path. An
+ * attempt that receives no data for `stallSeconds` is aborted (its connection
+ * destroyed, so nothing keeps the step running); failed attempts are retried
+ * like tool-cache's downloadTool. Throws DownloadError for an HTTP status
+ * other than 200 and for a stall.
+ */
+async function downloadFile(url, { stallSeconds = 30, attempts = 3, retryWaitSeconds = 10 } = {}) {
+    const dir = process.env['RUNNER_TEMP'] || external_os_default().tmpdir();
+    const dest = external_path_default().join(dir, external_crypto_default().randomUUID());
+    for (let attempt = 1;; attempt++) {
+        try {
+            await downloadOnce(url, dest, stallSeconds);
+            return dest;
+        }
+        catch (error) {
+            await external_fs_default().promises.rm(dest, { force: true });
+            const message = error instanceof Error ? error.message : `${error}`;
+            if (!isRetryable(error))
+                throw error;
+            if (attempt >= attempts) {
+                throw new DownloadError(attempts > 1 ? `${message} (${attempts} attempts)` : message, error instanceof DownloadError ? error.httpStatusCode : undefined);
+            }
+            info(`Downloading ${url} failed: ${message}; trying again in ${retryWaitSeconds} seconds`);
+            await (0,external_timers_promises_namespaceObject.setTimeout)(retryWaitSeconds * 1000);
+        }
+    }
+}
+async function downloadOnce(url, dest, stallSeconds) {
+    const client = new lib_HttpClient(USER_AGENT, [], {
+        allowRetries: false,
+        // http-client's own timeout ends the socket without destroying it; ours
+        // fires first and destroys it. This one is the backstop behind a proxy.
+        socketTimeout: (stallSeconds + 5) * 1000
+    });
+    let response;
+    let stalled = false;
+    // Restarted by every chunk received (refresh)
+    const timer = setTimeout(() => {
+        stalled = true;
+        // Destroys the connections of a direct request, waiting or mid-body
+        client.dispose();
+        response?.message.destroy();
+    }, stallSeconds * 1000);
+    try {
+        response = await client.get(url);
+        const status = response.message.statusCode;
+        if (status !== 200) {
+            throw new DownloadError(`HTTP ${status}`, status);
+        }
+        const progress = new external_stream_namespaceObject.Transform({
+            transform(chunk, _encoding, callback) {
+                timer.refresh();
+                callback(null, chunk);
+            }
+        });
+        await (0,promises_namespaceObject.pipeline)(response.message, progress, external_fs_default().createWriteStream(dest));
+    }
+    catch (error) {
+        if (stalled) {
+            throw new DownloadError(`download stalled: no data for ${stallSeconds} seconds`);
+        }
+        throw error;
+    }
+    finally {
+        clearTimeout(timer);
+        response?.message.destroy();
+        client.dispose();
+    }
+}
+
 ;// CONCATENATED MODULE: ./src/util.ts
 
 
@@ -35951,6 +36051,10 @@ async function getLatestTag(token) {
     catch (error) {
         throw latestLookupError(`${url}: ${error instanceof Error ? error.message : error}`);
     }
+    finally {
+        // Destroys the connection, also one http-client's timeout left half-closed
+        httpClient.dispose();
+    }
     if (status === 401 && token) {
         throw latestLookupError(`${url} answered HTTP 401: GitHub refused the token. Pin a version (version: 2.9.0) to skip this lookup, or pass a valid token (token input)`);
     }
@@ -35984,6 +36088,7 @@ async function getLatestTag(token) {
 
 
 
+
 /**
  * The main function for the action.
  * @returns {Promise<void>} Resolves when the action is complete.
@@ -35992,24 +36097,28 @@ async function run() {
     try {
         const version = getInput('version');
         const token = getInput('token');
+        if (token) {
+            // The runner masks the job token and secrets; this covers a literal one
+            core_setSecret(token);
+        }
         const release = await resolveRelease(version, token);
         info(`Installing DBSnapper Agent ${release.tag} (${release.archiveName})`);
         let archive;
         try {
-            archive = await downloadTool(release.archiveUrl);
+            archive = await downloadFile(release.archiveUrl);
         }
         catch (error) {
-            if (error instanceof HTTPError && error.httpStatusCode === 404) {
+            if (error instanceof DownloadError && error.httpStatusCode === 404) {
                 throw new Error(`Release ${release.tag} has no file ${release.archiveName} (HTTP 404 for ${release.archiveUrl}). The action supports Linux runners (x64, arm64) and DBSnapper Agent 2.7.1 or newer`);
             }
-            throw error;
+            throw new Error(`Failed to download ${release.archiveName} from ${release.archiveUrl}: ${error instanceof Error ? error.message : error}`);
         }
         let checksumsPath;
         try {
-            checksumsPath = await downloadTool(release.checksumsUrl);
+            checksumsPath = await downloadFile(release.checksumsUrl);
         }
         catch (error) {
-            const reason = error instanceof HTTPError && error.httpStatusCode === 404
+            const reason = error instanceof DownloadError && error.httpStatusCode === 404
                 ? 'the release publishes no checksums file'
                 : `${error instanceof Error ? error.message : error}`;
             throw new Error(`Cannot verify ${release.archiveName}: downloading ${release.checksumsUrl} failed (${reason}); refusing to install an unverified archive`);

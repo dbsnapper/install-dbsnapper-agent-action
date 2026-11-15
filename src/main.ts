@@ -2,6 +2,7 @@ import * as core from '@actions/core'
 import * as tc from '@actions/tool-cache'
 import fs from 'fs'
 import { verifyChecksum } from './checksum'
+import { DownloadError, downloadFile } from './download'
 import { resolveRelease } from './util'
 
 /**
@@ -12,6 +13,10 @@ export async function run(): Promise<void> {
   try {
     const version: string = core.getInput('version')
     const token: string = core.getInput('token')
+    if (token) {
+      // The runner masks the job token and secrets; this covers a literal one
+      core.setSecret(token)
+    }
     const release = await resolveRelease(version, token)
     core.info(
       `Installing DBSnapper Agent ${release.tag} (${release.archiveName})`
@@ -19,22 +24,24 @@ export async function run(): Promise<void> {
 
     let archive: string
     try {
-      archive = await tc.downloadTool(release.archiveUrl)
+      archive = await downloadFile(release.archiveUrl)
     } catch (error) {
-      if (error instanceof tc.HTTPError && error.httpStatusCode === 404) {
+      if (error instanceof DownloadError && error.httpStatusCode === 404) {
         throw new Error(
           `Release ${release.tag} has no file ${release.archiveName} (HTTP 404 for ${release.archiveUrl}). The action supports Linux runners (x64, arm64) and DBSnapper Agent 2.7.1 or newer`
         )
       }
-      throw error
+      throw new Error(
+        `Failed to download ${release.archiveName} from ${release.archiveUrl}: ${error instanceof Error ? error.message : error}`
+      )
     }
 
     let checksumsPath: string
     try {
-      checksumsPath = await tc.downloadTool(release.checksumsUrl)
+      checksumsPath = await downloadFile(release.checksumsUrl)
     } catch (error) {
       const reason =
-        error instanceof tc.HTTPError && error.httpStatusCode === 404
+        error instanceof DownloadError && error.httpStatusCode === 404
           ? 'the release publishes no checksums file'
           : `${error instanceof Error ? error.message : error}`
       throw new Error(

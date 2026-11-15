@@ -9,6 +9,7 @@
 import * as core from '@actions/core'
 import * as httpm from '@actions/http-client'
 import * as tc from '@actions/tool-cache'
+import * as download from '../src/download'
 import crypto from 'crypto'
 import fs from 'fs'
 import os from 'os'
@@ -28,7 +29,8 @@ const ARCHIVE_SHA256 = crypto
 let tmpDir: string
 let archivePath: string
 let setFailedMock: jest.SpyInstance
-let downloadToolMock: jest.SpyInstance
+let downloadMock: jest.SpyInstance
+let setSecretMock: jest.SpyInstance
 let extractTarMock: jest.SpyInstance
 let addPathMock: jest.SpyInstance
 
@@ -46,10 +48,10 @@ function serveRelease(checksums: string | undefined): void {
   if (checksums !== undefined) {
     fs.writeFileSync(checksumsPath, checksums)
   }
-  downloadToolMock.mockImplementation(async (url: string) => {
+  downloadMock.mockImplementation(async (url: string) => {
     if (url === ARCHIVE_URL) return archivePath
     if (url === CHECKSUMS_URL && checksums !== undefined) return checksumsPath
-    throw new tc.HTTPError(404)
+    throw new download.DownloadError('HTTP 404', 404)
   })
 }
 
@@ -65,7 +67,8 @@ describe('action', () => {
     jest.spyOn(core, 'info').mockImplementation()
     setFailedMock = jest.spyOn(core, 'setFailed').mockImplementation()
     addPathMock = jest.spyOn(core, 'addPath').mockImplementation()
-    downloadToolMock = jest.spyOn(tc, 'downloadTool')
+    setSecretMock = jest.spyOn(core, 'setSecret').mockImplementation()
+    downloadMock = jest.spyOn(download, 'downloadFile')
     extractTarMock = jest
       .spyOn(tc, 'extractTar')
       .mockResolvedValue('/path/to/agent')
@@ -87,10 +90,37 @@ describe('action', () => {
     expect(extractTarMock).toHaveBeenCalledWith(archivePath)
     expect(addPathMock).toHaveBeenCalledWith('/path/to/agent')
     // The token goes only to api.github.com, never with release downloads
-    expect(downloadToolMock.mock.calls).toEqual([
-      [ARCHIVE_URL],
-      [CHECKSUMS_URL]
-    ])
+    expect(downloadMock.mock.calls).toEqual([[ARCHIVE_URL], [CHECKSUMS_URL]])
+  })
+
+  test.each([
+    ['a token', 'literal-token', [['literal-token']]],
+    ['no token', '', []]
+  ])('masks the token in the log when given (%s)', async (_, token, calls) => {
+    useInput('v2.9.0', token)
+    serveRelease(`${ARCHIVE_SHA256}  ${ARCHIVE_NAME}\n`)
+
+    await main.run()
+
+    expect(setSecretMock.mock.calls).toEqual(calls)
+    expect(setFailedMock).not.toHaveBeenCalled()
+  })
+
+  it('names the archive and the stall when its download stalls', async () => {
+    useInput('v2.9.0')
+    downloadMock.mockRejectedValue(
+      new download.DownloadError(
+        'download stalled: no data for 30 seconds (3 attempts)'
+      )
+    )
+
+    await main.run()
+
+    expect(setFailedMock).toHaveBeenCalledWith(
+      `Failed to download ${ARCHIVE_NAME} from ${ARCHIVE_URL}: download stalled: no data for 30 seconds (3 attempts)`
+    )
+    expect(extractTarMock).not.toHaveBeenCalled()
+    expect(addPathMock).not.toHaveBeenCalled()
   })
 
   it('fails without unpacking when the archive does not match its checksum', async () => {
@@ -159,7 +189,7 @@ describe('action', () => {
   it('latest downloads the archive of the newest full release, which exists', async () => {
     useInput('latest', '')
     const requested: string[] = []
-    downloadToolMock.mockImplementation(async (url: string) => {
+    downloadMock.mockImplementation(async (url: string) => {
       requested.push(url)
       throw new Error('test: stop after the first download')
     })

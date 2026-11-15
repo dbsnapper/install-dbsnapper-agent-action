@@ -667,3 +667,72 @@ Left, all development:
   the full key pattern `AKIA[0-9A-Z]{16}` counts 0.
 - Not run: CI on GitHub (no push), the Mac gates (the conductor's).
 - Left: open items above.
+
+### Fixes after the review stop (majors)
+
+Conductor's decisions on the stop at `eaa6d76`: (1) fix the stalled download
+now, (3) mask the token, (2) leave the minimatch pin and `prettier-eslint` 17
+for Joe; keep the Jest hang fix on this branch.
+
+- **(1) Stalled download** (the open item above). `src/download.ts` replaces
+  `tc.downloadTool` for the archive and `checksums.txt`; `tool-cache` is still
+  used for `extractTar`.
+  - One timer per attempt, restarted by every chunk received. After 30 s without
+    data it destroys the attempt's connections (`HttpClient.dispose()`, which
+    destroys the client's own agent, and the response stream) and the attempt
+    fails with `download stalled: no data for 30 seconds`. The client is
+    disposed after every attempt, success or not, so no socket stays behind.
+  - Retries as `tool-cache` did: 3 attempts, 10 s apart, no retry on an HTTP
+    status below 500 other than 408 and 429; a partial file is deleted. Worst
+    case for a dead connection: about 2 minutes (3 × 30 s + 2 × 10 s), then the
+    step fails with
+    `Failed to download dbsnapper_…tar.gz from <url>: download stalled: no data for 30 seconds (3 attempts)`.
+    `checksums.txt` failures keep their `Cannot verify …` message.
+  - The same `http-client` timeout also applies to the `latest` lookup; that
+    client is now disposed after its one request too.
+  - Behind a proxy `http-client` uses a tunnel agent that `dispose()` does not
+    destroy: a stall mid-file is still cut (the response stream is destroyed), a
+    stall before the answer ends with `http-client`'s own timeout (35 s here)
+    and may leave that one half-closed socket [INFERENCE: read in `http-client`,
+    no proxy to test with].
+  - Before, for the record: `tc.downloadTool` (tool-cache 4.0.0) against a local
+    server that stops after 5 of 100 bytes had not settled after 45 s (throwaway
+    script `/tmp/dbs-iam/stall-probe.mjs`, `timeout 45`, exit 124, "still
+    waiting" at 10, 20, 30 and 40 s).
+- **(3) Token mask:** `core.setSecret(token)` when the token is not empty
+  (`src/main.ts`), so a token written literally into a workflow is masked too;
+  the runner already masks the job token and secrets.
+- **(2) Left for Joe**, development only, nothing in the bundle: the minimatch
+  `overrides` pin (8 advisories) and `prettier-eslint` 17 (no audit gain), as
+  described above.
+- **Jest hang** (the unread HEAD response): fixed here, also present on `main`
+  (887639a), as described above.
+
+New tests:
+
+| Test                                                                      | What it proves                                                                                                      |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `download.test.ts`: server stops sending before the answer / mid-file (2) | fails in < 3 s with `download stalled …(2 attempts)`, 2 requests, every server-side connection closes, no file left |
+| `download.test.ts`: full answer; HTTP 404                                 | file written under `RUNNER_TEMP`; 404 fails after 1 request with its status                                         |
+| `main.test.ts`: masks the token (with / without a token)                  | `setSecret` called once with the token; not called for an empty one                                                 |
+| `main.test.ts`: archive download stalls                                   | the step fails with `Failed to download <archive> from <url>: download stalled …`, nothing unpacked                 |
+
+- The download tests listen on `127.0.0.1`, port from `INSTALL_ACTION_TEST_PORT`
+  (0 = the kernel picks one); on alfa I ran them on 30410 (my block).
+
+Runs (Node 24.22.3, same load brake; one more slip: the 17:53Z run of the checks
+below started at load1 16.6, the guard read the load a moment earlier):
+
+| Run                                              | Result                                                                           |
+| ------------------------------------------------ | -------------------------------------------------------------------------------- |
+| `npm run bundle`, 17:54Z                         | exit 0; `dist/` rebuilt                                                          |
+| `npm run lint` / `format:check` / `tsc --noEmit` | exit 0 / 0 / 0                                                                   |
+| `timeout 150 npx jest` (4 files), 17:55Z         | exit 0: 33 passed, 0 failed; Jest exited by itself; `download.ts` 100 % of lines |
+| End-to-end `latest` (bundle), 17:56–17:57Z       | ✅ exit 0, agent 2.9.0, verified; see below                                      |
+
+- The end-to-end run hit a real stall: the first archive request got no data,
+  and the step logged
+  `Downloading https://github.com/…/dbsnapper_2.9.0_linux_arm64.tar.gz failed: download stalled: no data for 30 seconds; trying again in 10 seconds`,
+  then the second attempt downloaded, verified and unpacked it, and the process
+  exited on its own: 43 s for the whole run (17:56:23 to 17:57:06Z), against
+  more than 2 minutes still running in the first-round stall.
