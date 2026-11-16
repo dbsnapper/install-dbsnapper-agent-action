@@ -2,16 +2,17 @@
  * Unit tests for the action's entrypoint, src/index.ts
  */
 
+import * as lifecycle from '../src/lifecycle'
 import * as main from '../src/main'
 
-// Mock the action's entrypoint
-const runMock = jest.spyOn(main, 'run').mockImplementation()
+// Mocked: the real one would end the Jest worker's process
+const runToEndMock = jest.spyOn(lifecycle, 'runToEnd').mockResolvedValue()
 
 describe('index', () => {
-  it('calls run when imported', async () => {
+  it('runs the action to its end when imported', async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     require('../src/index')
 
-    expect(runMock).toHaveBeenCalled()
+    expect(runToEndMock).toHaveBeenCalledWith(main.run)
   })
 })
