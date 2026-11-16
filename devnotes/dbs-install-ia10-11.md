@@ -131,10 +131,9 @@ adapted from the review's harness: `/tmp/dbs-ia10-11/h/b.sh`, batch 01:21Z to
   retried (it never was), so the default path fails within about 30 s instead of
   3 minutes or never. A retry would be a product change (more API calls under a
   rate limit); not done.
-- **`process.exit()` after `run()`.** Output of `@actions/core` is written
-  synchronously to the runner's pipe and `GITHUB_PATH` with `appendFileSync`, so
-  nothing is lost by ending the process [INFERENCE: Node docs on pipes on Linux;
-  the bundle probes below show the full output before the exit].
+- **`process.exit()` after `run()`.** My first reasoning here ("written
+  synchronously to the runner's pipe") was wrong: on Linux a pipe is
+  asynchronous. The fix round makes the exit wait for the output (IA13, below).
 - **Message for a cut answer** names the cause in plain words, not Node's
   `aborted` / `ECONNRESET`.
 - **Test-only third argument** on `resolveRelease` instead of fake timers: the
@@ -148,29 +147,95 @@ adapted from the review's harness: `/tmp/dbs-ia10-11/h/b.sh`, batch 01:21Z to
 - Not in scope, unchanged: the minimatch overrides pin, `prettier-eslint` 17,
   the super-linter bump.
 
+## Fix round after the review (IA12, IA13)
+
+Review of `7ecdfe6`: clonit-meta `planning/dbsnapper-clonit-future/reports/`
+`review-dbs-install-ia10-11.md` (merge: yes). alfa-app's decision under
+delegation (02:07Z): IA12 and IA13 land before `v1` moves; the 30 s lookup limit
+without a retry stays.
+
+- **IA12** (LOW, not reachable today): an action that rejects ended the step
+  **green**. `runToEnd` called `process.exit()` in its `finally`, before the
+  rejection surfaced, and nothing had set the exit code. `run()` catches
+  everything today, so only a later change to `main.ts` could reach it.
+  - Fix: `runToEnd` catches the rejection and calls
+    `core.setFailed('The action failed unexpectedly: <message>')` (exit code 1,
+    `::error::` line).
+- **IA13** (NIT): `process.exit()` right after `run()` dropped output still
+  queued. On Linux a pipe, which is what the runner reads, is asynchronous (the
+  review cites Node's process docs). My first-round decision said
+  "synchronously"; that was wrong, and the review measured it: 200,000 bytes to
+  a reader 2 s late, 64,000 arrived and the error line was lost.
+  - Fix: before `exit()`, `runToEnd` writes an empty string to stdout and stderr
+    and waits for both callbacks. Writes complete in order, so a callback comes
+    only after everything queued before it has gone out, or with the stream's
+    error if the stream is broken. The `beforeExit` guard is unchanged.
+- **Test gaps** the review named, closed with fake timers in a new
+  `__tests__/watchdog.test.ts`: data restarts the limit, the timer is cleared
+  after the work, and the limit without data rejects and calls `onStall`.
+  - Not done: a test for the late answer of an ended attempt (`src/download.ts`,
+    the `ended` check). The review proved that path with a probe; the conductor
+    did not ask for a test.
+- `dist/` rebuilt with `npm run bundle`.
+
+### Fix round: tests
+
+- Jest on alfa (02:12Z,
+  `INSTALL_ACTION_TEST_PORT=30700 timeout 150 npx jest -w 2`): 6 suites, **48
+  passed, 0 failed**, Jest exited by itself. `npm run lint` 0 errors,
+  `tsc --noEmit` exit 0, `prettier --check` clean.
+- The new tests (`lifecycle.test.ts`, `watchdog.test.ts`) against `7ecdfe6`'s
+  sources and 2 watchdog mutants of it (`/tmp/dbs-ia10-11/`, 02:13Z):
+
+| Test                                                  | `7ecdfe6` | Mutant: no refresh | Mutant: timer not cleared |
+| ----------------------------------------------------- | --------- | ------------------ | ------------------------- |
+| lifecycle: a rejecting action fails the step (IA12)   | ❌        | ❌                 | ❌                        |
+| lifecycle: exit waits for queued output (IA13)        | ❌        | ❌                 | ❌                        |
+| watchdog: data restarts the limit                     | ✅        | ❌                 | ✅                        |
+| watchdog: timer cleared after the work                | ✅        | ✅                 | ❌                        |
+| watchdog: limit without data rejects, calls `onStall` | ✅        | ✅                 | ✅                        |
+| lifecycle: the 2 earlier tests (end, `beforeExit`)    | ✅ ✅     | ✅ ✅              | ✅ ✅                     |
+
+- Real process: the review's `runToEnd` probe (`zz-life.ts` with made-up
+  actions, built with `ncc` from each tree's `src/`), stdout a pipe, 02:15Z:
+
+| Probe                                          | `7ecdfe6`                                | Head                                                       |
+| ---------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------- |
+| Action rejects (`throw`)                       | ❌ **exit 0**, 0 bytes of output         | ✅ exit 1, `::error::The action failed unexpectedly: boom` |
+| 200,000 bytes, then the error, reader 2 s late | ❌ exit 1, 64,000 bytes, error line lost | ✅ exit 1, 200,019 of 200,019 bytes, error line seen       |
+| 2,000 bytes, reader 2 s late                   | ✅ all, error line seen                  | ✅ all, error line seen                                    |
+| Never settles (`beforeExit` guard)             | ✅ exit 1, guard message                 | ✅ exit 1, guard message                                   |
+| Failed / succeeded with a handle left open     | ✅ exit 1 / exit 0 within 8 ms           | ✅ exit 1 / exit 0 within 8 ms                             |
+
+- Rebuilt bundle against the local stand-in for GitHub (02:15Z): `latest` direct
+  and through a proxy exit 0 and install; cut lookup exit 1 with its message;
+  wrong archive exit 1 with `Checksum mismatch …`, nothing on `PATH`.
+
 ## Status
 
-- Work commit on branch `dbs-install-ia10-11` on top of `1105037`, after the
-  conductor's `commit` word (its sha is in the `commit` message: a commit cannot
-  name itself). No push, no tag, no release, no workflow started.
-- Changed files (`git diff --numstat`, added/removed): `src/download.ts` 33/27,
+- Commits on branch `dbs-install-ia10-11`: `7ecdfe6` (IA10, IA11) on `1105037`,
+  then the fix-round commit (IA12, IA13; its sha is in the `commit` message: a
+  commit cannot name itself). No push, no tag, no release, no workflow started.
+- First round, changed files (added/removed): `src/download.ts` 33/27,
   `src/util.ts` 63/13, `src/index.ts` 2/1, `__tests__/download.test.ts` 81/12,
-  `__tests__/util.test.ts` 155/4, `__tests__/index.test.ts` 5/4, `dist/index.js`
-  and `dist/index.js.map` (rebuilt). New: `src/watchdog.ts` 39 lines,
-  `src/lifecycle.ts` 31, `__tests__/lifecycle.test.ts` 40, this report.
+  `__tests__/util.test.ts` 155/4, `__tests__/index.test.ts` 5/4, `dist/`
+  rebuilt; new `src/watchdog.ts`, `src/lifecycle.ts`,
+  `__tests__/lifecycle.test.ts`, this report.
+- Fix round: `src/lifecycle.ts` 23/2, `__tests__/lifecycle.test.ts` 61/2, new
+  `__tests__/watchdog.test.ts` 55 lines, `dist/` rebuilt (`dist/index.js`
+  SHA-256 starts `829c726a93e92674`), this report.
 - Ran on alfa (Node 24.22.3, `flock /tmp/dbs-heavy.lock nice -n 19`; load1 at
-  most 15.04 and memory PSI avg60 at most 2.93 at each logged start; the probe
-  batch's 01:21Z start went through `launch-slot` without its own load reading):
-  lint, `tsc`, Jest (5 files, 43 of 43), the base run of the new tests,
-  `npm run bundle`, 18 bundle probes.
-- Privacy scan and key-format scan: 0 and 0 on each of the 10 changed source,
-  test and report files, on the 150 added lines of `dist/index.js`
-  (`git diff --text`) and on the commit message.
+  most 15.04 and memory PSI avg60 at most 2.93 at each logged start, fix round
+  at most 4.65 and 0.02; the first round's probe batch started at 01:21Z through
+  `launch-slot` without its own load reading): lint, `tsc`, Jest, the base runs
+  of the new tests, `npm run bundle`, the bundle and lifecycle probes above.
+- Privacy scan and key-format scan: 0 and 0 on every changed source, test and
+  report file, on the added lines of `dist/index.js` (`git diff --text`) and on
+  each commit message.
   - `dist/index.js.map` is one line, so all of it counts as added: 0 private
     terms; the key-format pattern hits 6 times, the same 6 as in `1105037`'s map
     (third-party code: `Number.MAX_SAFE_INTEGER` spelled out, base64 WebAssembly
     in `undici`, a curl commit hash); `dist/index.js` likewise 6 on head and 6
     on base.
-- Left: the Mac gate (`npm ci && npm run all`, `dist/` diff); the 30 s lookup
-  limit without retry goes to the reviewer and Joe (recommended as is); release
-  and `v1` are Joe's.
+- Left: the Mac gate (`npm ci && npm run all`, `dist/` diff); release and `v1`
+  are Joe's.

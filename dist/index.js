@@ -35045,11 +35045,16 @@ const ENDED_EARLY = 'The action ended before the install finished (a connection 
  * - Ending the process: a connection nobody can destroy (a proxy's tunnel
  *   still waiting for its CONNECT answer) would keep Node, and the step,
  *   running after the action finished, until the job's time limit.
+ * - The end waits until `output` (stdout and stderr) has written what is
+ *   queued: on Linux a pipe, which is what the runner reads, is asynchronous,
+ *   and process.exit() drops writes still queued, the error line among them.
+ * - An action that rejects fails the step with its error; otherwise the exit
+ *   code would still be 0 (nothing called setFailed) and the step green.
  * - If Node runs out of work before the action finished (a promise that never
  *   settles), it would exit with code 0 and the step would end green with
  *   nothing installed; `beforeExit` fails the step instead.
  */
-async function runToEnd(action, exit = () => process.exit()) {
+async function runToEnd(action, exit = () => process.exit(), output = [process.stdout, process.stderr]) {
     let finished = false;
     const onBeforeExit = () => {
         if (!finished)
@@ -35059,11 +35064,19 @@ async function runToEnd(action, exit = () => process.exit()) {
     try {
         await action();
     }
+    catch (error) {
+        setFailed(`The action failed unexpectedly: ${error instanceof Error ? error.message : error}`);
+    }
     finally {
         finished = true;
         process.off('beforeExit', onBeforeExit);
-        exit();
     }
+    // Writes complete in order: the callback of this empty write comes after
+    // everything queued before it (or with the stream's error, if it has one)
+    await Promise.all(output.map(async (stream) => new Promise(resolve => {
+        stream.write('', () => resolve());
+    })));
+    exit();
 }
 
 // EXTERNAL MODULE: ./node_modules/@actions/tool-cache/node_modules/semver/index.js
