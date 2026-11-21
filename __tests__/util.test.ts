@@ -1,6 +1,10 @@
 import { expect, test } from '@jest/globals'
 import * as httpm from '@actions/http-client'
+import { once } from 'events'
+import http from 'http'
+import net, { AddressInfo, Socket } from 'net'
 import os from 'os'
+import { Readable } from 'stream'
 import { resolveRelease } from '../src/util'
 
 const LATEST_URL =
@@ -8,10 +12,63 @@ const LATEST_URL =
 
 // Answers the latest-release lookup with `status` and `body`, without network.
 function answerLookup(status: number, body: string): jest.SpyInstance {
-  return jest.spyOn(httpm.HttpClient.prototype, 'get').mockResolvedValue({
-    message: { statusCode: status },
-    readBody: async () => body
-  } as unknown as httpm.HttpClientResponse)
+  const message = Object.assign(Readable.from([Buffer.from(body)]), {
+    statusCode: status,
+    complete: true
+  })
+  return jest
+    .spyOn(httpm.HttpClient.prototype, 'get')
+    .mockResolvedValue({ message } as unknown as httpm.HttpClientResponse)
+}
+
+// Port 0 lets the kernel choose; set this to stay inside a reserved block.
+// +1: download.test.ts, which may run at the same time, uses the port itself.
+const BASE_PORT = Number(process.env['INSTALL_ACTION_TEST_PORT'] ?? 0)
+const PORT = BASE_PORT ? BASE_PORT + 1 : 0
+const PROXY_VARS = [
+  'http_proxy',
+  'HTTP_PROXY',
+  'https_proxy',
+  'HTTPS_PROXY',
+  'no_proxy',
+  'NO_PROXY'
+]
+// The full answer GitHub would send: several kB, so it spans several packets
+const FULL_ANSWER = JSON.stringify({
+  tag_name: 'v2.9.0',
+  pad: 'x'.repeat(20000)
+})
+
+let server: net.Server | undefined
+let sockets: Socket[] = []
+let connections = 0
+const savedEnv: Record<string, string | undefined> = {}
+
+async function listen(s: net.Server): Promise<number> {
+  server = s
+  server.on('connection', (socket: Socket) => {
+    connections++
+    sockets.push(socket)
+  })
+  server.listen(PORT, '127.0.0.1')
+  await once(server, 'listening')
+  return (server.address() as AddressInfo).port
+}
+
+// Sends the lookup to a local server answering with `handler`, through
+// http-client's real request and response code
+async function lookupAgainst(
+  handler: (res: http.ServerResponse) => void
+): Promise<void> {
+  const port = await listen(http.createServer((_req, res) => handler(res)))
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- called below with the lookup's client as `this`
+  const realGet = httpm.HttpClient.prototype.get
+  jest
+    .spyOn(httpm.HttpClient.prototype, 'get')
+    .mockImplementation(async function (this: httpm.HttpClient, _url, headers) {
+      // eslint-disable-next-line no-invalid-this -- the client the lookup created
+      return realGet.call(this, `http://127.0.0.1:${port}/latest`, headers)
+    })
 }
 
 describe('util.ts', () => {
@@ -19,6 +76,26 @@ describe('util.ts', () => {
     jest.restoreAllMocks()
     jest.spyOn(os, 'platform').mockReturnValue('linux')
     jest.spyOn(os, 'arch').mockReturnValue('x64')
+    // No proxy unless a test sets one
+    for (const name of PROXY_VARS) {
+      savedEnv[name] = process.env[name]
+      delete process.env[name]
+    }
+  })
+
+  afterEach(async () => {
+    for (const socket of sockets) socket.destroy()
+    sockets = []
+    connections = 0
+    if (server) {
+      server.close()
+      await once(server, 'close')
+      server = undefined
+    }
+    for (const name of PROXY_VARS) {
+      if (savedEnv[name] === undefined) delete process.env[name]
+      else process.env[name] = savedEnv[name]
+    }
   })
 
   test.each(['2.7.2', 'v2.7.2'])(
@@ -124,5 +201,79 @@ describe('util.ts', () => {
     await expect(resolveRelease('latest')).rejects.toThrow(
       `Failed to resolve the latest DBSnapper Agent release: ${LATEST_URL}: getaddrinfo ENOTFOUND api.github.com`
     )
+  })
+
+  test.each([
+    ['destroys', (socket: Socket): unknown => socket.destroy()],
+    ['closes', (socket: Socket): unknown => socket.end()]
+  ])(
+    'a connection the server %s in the middle of the answer fails the lookup with its prefix',
+    async (_, cut) => {
+      await lookupAgainst(res => {
+        res.writeHead(200, { 'content-length': String(FULL_ANSWER.length) })
+        res.write(FULL_ANSWER.slice(0, 100))
+        // Real time on purpose: the client must have the headers and the
+        // first bytes before the cut, and a reset sent at once can overtake
+        // them; the server cannot observe the client's read
+        setTimeout(() => cut(res.socket as Socket), 50)
+      })
+
+      await expect(
+        resolveRelease('latest', undefined, { stallSeconds: 5 })
+      ).rejects.toThrow(
+        `Failed to resolve the latest DBSnapper Agent release: ${LATEST_URL}: the connection closed before the whole answer arrived`
+      )
+    }
+  )
+
+  test('the lookup reads an answer of several packets over a real connection', async () => {
+    await lookupAgainst(res => {
+      res.writeHead(200, { 'content-length': String(FULL_ANSWER.length) })
+      res.end(FULL_ANSWER)
+    })
+
+    await expect(resolveRelease('latest')).resolves.toEqual(
+      expect.objectContaining({ tag: 'v2.9.0' })
+    )
+  })
+
+  test.each([
+    ['before the answer', (): void => {}],
+    [
+      'in the middle of the answer',
+      (res: http.ServerResponse): void => {
+        res.writeHead(200, { 'content-length': String(FULL_ANSWER.length) })
+        res.write(FULL_ANSWER.slice(0, 100))
+      }
+    ]
+  ])(
+    'a server that stops sending %s fails the lookup at the stall limit',
+    async (_, handler) => {
+      await lookupAgainst(handler)
+      const started = Date.now()
+
+      await expect(
+        resolveRelease('latest', undefined, { stallSeconds: 0.3 })
+      ).rejects.toThrow(
+        `Failed to resolve the latest DBSnapper Agent release: ${LATEST_URL}: the answer stalled: no data for 0.3 seconds`
+      )
+      expect(Date.now() - started).toBeLessThan(3000)
+    }
+  )
+
+  test('behind a proxy that accepts the connection and never answers CONNECT, the lookup fails at the stall limit', async () => {
+    // Reads the CONNECT request, never answers it
+    const port = await listen(net.createServer())
+    process.env['https_proxy'] = `http://127.0.0.1:${port}`
+    const started = Date.now()
+
+    await expect(
+      resolveRelease('latest', undefined, { stallSeconds: 0.3 })
+    ).rejects.toThrow(
+      `Failed to resolve the latest DBSnapper Agent release: ${LATEST_URL}: the answer stalled: no data for 0.3 seconds`
+    )
+    expect(Date.now() - started).toBeLessThan(3000)
+    // The lookup went to the proxy, not to api.github.com
+    expect(connections).toBe(1)
   })
 })

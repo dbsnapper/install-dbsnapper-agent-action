@@ -7,6 +7,7 @@ import path from 'path'
 import { Transform } from 'stream'
 import { pipeline } from 'stream/promises'
 import { setTimeout as sleep } from 'timers/promises'
+import { StallError, withWatchdog } from './watchdog'
 
 const USER_AGENT = 'dbsnapper-install-gh-action'
 
@@ -35,10 +36,10 @@ function isRetryable(error: unknown): boolean {
 
 /**
  * Downloads `url` to a new file under RUNNER_TEMP and returns its path. An
- * attempt that receives no data for `stallSeconds` is aborted (its connection
- * destroyed, so nothing keeps the step running); failed attempts are retried
- * like tool-cache's downloadTool. Throws DownloadError for an HTTP status
- * other than 200 and for a stall.
+ * attempt that receives no data for `stallSeconds` fails at that limit, also
+ * when a proxy never answers (the connections it can reach are destroyed);
+ * failed attempts are retried like tool-cache's downloadTool. Throws
+ * DownloadError for an HTTP status other than 200 and for a stall.
  */
 export async function downloadFile(
   url: string,
@@ -84,37 +85,42 @@ async function downloadOnce(
     socketTimeout: (stallSeconds + 5) * 1000
   })
   let response: httpm.HttpClientResponse | undefined
-  let stalled = false
-  // Restarted by every chunk received (refresh)
-  const timer = setTimeout(() => {
-    stalled = true
-    // Destroys the connections of a direct request, waiting or mid-body
+  let ended = false
+  // Destroys the connections of a direct request, waiting or mid-body. Behind
+  // a proxy, a tunnel still waiting for its CONNECT answer is out of reach;
+  // the watchdog ends the attempt anyway and index.ts ends the process.
+  const destroyConnections = (): void => {
     client.dispose()
     response?.message.destroy()
-  }, stallSeconds * 1000)
+  }
   try {
-    response = await client.get(url)
-    const status = response.message.statusCode
-    if (status !== 200) {
-      throw new DownloadError(`HTTP ${status}`, status)
-    }
-    const progress = new Transform({
-      transform(chunk, _encoding, callback) {
-        timer.refresh()
-        callback(null, chunk)
+    await withWatchdog(stallSeconds, destroyConnections, async refresh => {
+      response = await client.get(url)
+      if (ended) {
+        // Answer came after the stall: never write into `dest` again, the
+        // next attempt uses it
+        response.message.destroy()
+        return
       }
+      const status = response.message.statusCode
+      if (status !== 200) {
+        throw new DownloadError(`HTTP ${status}`, status)
+      }
+      const progress = new Transform({
+        transform(chunk, _encoding, callback) {
+          refresh()
+          callback(null, chunk)
+        }
+      })
+      await pipeline(response.message, progress, fs.createWriteStream(dest))
     })
-    await pipeline(response.message, progress, fs.createWriteStream(dest))
   } catch (error) {
-    if (stalled) {
-      throw new DownloadError(
-        `download stalled: no data for ${stallSeconds} seconds`
-      )
+    if (error instanceof StallError) {
+      throw new DownloadError(`download stalled: ${error.message}`)
     }
     throw error
   } finally {
-    clearTimeout(timer)
-    response?.message.destroy()
-    client.dispose()
+    ended = true
+    destroyConnections()
   }
 }

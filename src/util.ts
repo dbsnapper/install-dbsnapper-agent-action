@@ -1,6 +1,7 @@
 import * as httpm from '@actions/http-client'
 import { OutgoingHttpHeaders } from 'http'
 import os from 'os'
+import { StallError, withWatchdog } from './watchdog'
 
 const REPO = 'dbsnapper/dbsnapper'
 const CHECKSUMS_FILE = 'checksums.txt'
@@ -51,6 +52,11 @@ function releaseFileUrl(tag: string, file: string): string {
 // A release version as the agent's tags spell it: 2.9.0, v2.9.0, v3.0.0-pr1
 const VERSION_PATTERN = /^v?\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/
 
+export interface LookupOptions {
+  // No data for this long fails the `latest` lookup
+  stallSeconds?: number
+}
+
 /**
  * Resolves the release to install: `latest` (or no version) is the newest
  * published release that is not a prerelease; anything else must be a version
@@ -59,11 +65,12 @@ const VERSION_PATTERN = /^v?\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/
  */
 export async function resolveRelease(
   version?: string,
-  token?: string
+  token?: string,
+  { stallSeconds = 30 }: LookupOptions = {}
 ): Promise<AgentRelease> {
   let tag: string
   if (!version || version === 'latest') {
-    tag = await getLatestTag(token)
+    tag = await getLatestTag(token, stallSeconds)
   } else if (VERSION_PATTERN.test(version)) {
     tag = `v${stripLeadingV(version)}`
   } else {
@@ -88,10 +95,35 @@ function latestLookupError(reason: string): Error {
   )
 }
 
+// Unlike http-client's readBody, which never settles (and so lets Node exit
+// with code 0 when nothing else is pending) when the connection closes
+// before the answer is complete
+async function readAll(
+  res: httpm.HttpClientResponse,
+  refresh: () => void
+): Promise<string> {
+  const chunks: Buffer[] = []
+  try {
+    for await (const chunk of res.message) {
+      refresh()
+      chunks.push(chunk)
+    }
+  } catch (error) {
+    if (res.message.complete) throw error
+  }
+  if (!res.message.complete) {
+    throw new Error('the connection closed before the whole answer arrived')
+  }
+  return Buffer.concat(chunks).toString()
+}
+
 // GitHub's "latest release" is the newest release that is neither a draft
 // nor a prerelease:
 // https://docs.github.com/en/rest/releases/releases#get-the-latest-release
-async function getLatestTag(token?: string): Promise<string> {
+async function getLatestTag(
+  token: string | undefined,
+  stallSeconds: number
+): Promise<string> {
   const httpClient = new httpm.HttpClient('dbsnapper-install-gh-action', [], {
     headers: {
       Accept: 'application/vnd.github+json',
@@ -102,20 +134,38 @@ async function getLatestTag(token?: string): Promise<string> {
   const headers: OutgoingHttpHeaders = token
     ? { authorization: `Bearer ${token}` }
     : {}
-  let status: number | undefined
-  let body: string
-  try {
-    const res = await httpClient.get(url, headers)
-    status = res.message.statusCode
-    body = await res.readBody()
-  } catch (error) {
-    throw latestLookupError(
-      `${url}: ${error instanceof Error ? error.message : error}`
-    )
-  } finally {
-    // Destroys the connection, also one http-client's timeout left half-closed
+  let res: httpm.HttpClientResponse | undefined
+  // Destroys a direct connection, also one http-client's timeout left
+  // half-closed; behind a proxy the watchdog ends the lookup anyway
+  const destroyConnections = (): void => {
     httpClient.dispose()
+    res?.message.destroy()
   }
+  let answer: { status: number | undefined; body: string }
+  try {
+    answer = await withWatchdog(
+      stallSeconds,
+      destroyConnections,
+      async refresh => {
+        res = await httpClient.get(url, headers)
+        return {
+          status: res.message.statusCode,
+          body: await readAll(res, refresh)
+        }
+      }
+    )
+  } catch (error) {
+    const reason =
+      error instanceof StallError
+        ? `the answer stalled: ${error.message}`
+        : error instanceof Error
+          ? error.message
+          : `${error}`
+    throw latestLookupError(`${url}: ${reason}`)
+  } finally {
+    destroyConnections()
+  }
+  const { status, body } = answer
   if (status === 401 && token) {
     throw latestLookupError(
       `${url} answered HTTP 401: GitHub refused the token. Pin a version (version: 2.9.0) to skip this lookup, or pass a valid token (token input)`

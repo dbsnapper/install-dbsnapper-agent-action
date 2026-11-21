@@ -35037,6 +35037,48 @@ function getIDToken(aud) {
  */
 
 //# sourceMappingURL=core.js.map
+;// CONCATENATED MODULE: ./src/lifecycle.ts
+
+const ENDED_EARLY = 'The action ended before the install finished (a connection closed without an error); nothing was installed. Run the job again';
+/**
+ * Runs the action, then ends the process with the exit code the action set.
+ * - Ending the process: a connection nobody can destroy (a proxy's tunnel
+ *   still waiting for its CONNECT answer) would keep Node, and the step,
+ *   running after the action finished, until the job's time limit.
+ * - The end waits until `output` (stdout and stderr) has written what is
+ *   queued: on Linux a pipe, which is what the runner reads, is asynchronous,
+ *   and process.exit() drops writes still queued, the error line among them.
+ * - An action that rejects fails the step with its error; otherwise the exit
+ *   code would still be 0 (nothing called setFailed) and the step green.
+ * - If Node runs out of work before the action finished (a promise that never
+ *   settles), it would exit with code 0 and the step would end green with
+ *   nothing installed; `beforeExit` fails the step instead.
+ */
+async function runToEnd(action, exit = () => process.exit(), output = [process.stdout, process.stderr]) {
+    let finished = false;
+    const onBeforeExit = () => {
+        if (!finished)
+            setFailed(ENDED_EARLY);
+    };
+    process.once('beforeExit', onBeforeExit);
+    try {
+        await action();
+    }
+    catch (error) {
+        setFailed(`The action failed unexpectedly: ${error instanceof Error ? error.message : error}`);
+    }
+    finally {
+        finished = true;
+        process.off('beforeExit', onBeforeExit);
+    }
+    // Writes complete in order: the callback of this empty write comes after
+    // everything queued before it (or with the stream's error, if it has one)
+    await Promise.all(output.map(async (stream) => new Promise(resolve => {
+        stream.write('', () => resolve());
+    })));
+    exit();
+}
+
 // EXTERNAL MODULE: ./node_modules/@actions/tool-cache/node_modules/semver/index.js
 var node_modules_semver = __nccwpck_require__(885);
 ;// CONCATENATED MODULE: ./node_modules/@actions/tool-cache/lib/manifest.js
@@ -35871,7 +35913,47 @@ async function verifyChecksum(archivePath, archiveName, checksums) {
 const promises_namespaceObject = require("stream/promises");
 ;// CONCATENATED MODULE: external "timers/promises"
 const external_timers_promises_namespaceObject = require("timers/promises");
+;// CONCATENATED MODULE: ./src/watchdog.ts
+class StallError extends Error {
+    seconds;
+    constructor(seconds) {
+        super(`no data for ${seconds} seconds`);
+        this.seconds = seconds;
+        this.name = 'StallError';
+    }
+}
+/**
+ * Runs `work` under a watchdog. `work` calls `refresh` whenever data arrives;
+ * after `seconds` without a refresh, `onStall` runs (to destroy the
+ * connections it can reach) and the returned promise rejects with StallError
+ * at once, whether or not `work` ever settles. So a connection nobody can
+ * destroy (a proxy that accepts and never answers CONNECT) cannot hold the
+ * step past the limit.
+ */
+async function withWatchdog(seconds, onStall, work) {
+    let rejectStalled = () => { };
+    const stalled = new Promise((_resolve, reject) => {
+        rejectStalled = reject;
+    });
+    const timer = setTimeout(() => {
+        // Reject first: the errors onStall causes in `work` come later
+        rejectStalled(new StallError(seconds));
+        onStall();
+    }, seconds * 1000);
+    const job = work(() => timer.refresh());
+    try {
+        // After a stall `work` may still reject (its connections were destroyed);
+        // race's handler on `job` keeps that from being an unhandled rejection,
+        // which would end Node
+        return await Promise.race([job, stalled]);
+    }
+    finally {
+        clearTimeout(timer);
+    }
+}
+
 ;// CONCATENATED MODULE: ./src/download.ts
+
 
 
 
@@ -35897,10 +35979,10 @@ function isRetryable(error) {
 }
 /**
  * Downloads `url` to a new file under RUNNER_TEMP and returns its path. An
- * attempt that receives no data for `stallSeconds` is aborted (its connection
- * destroyed, so nothing keeps the step running); failed attempts are retried
- * like tool-cache's downloadTool. Throws DownloadError for an HTTP status
- * other than 200 and for a stall.
+ * attempt that receives no data for `stallSeconds` fails at that limit, also
+ * when a proxy never answers (the connections it can reach are destroyed);
+ * failed attempts are retried like tool-cache's downloadTool. Throws
+ * DownloadError for an HTTP status other than 200 and for a stall.
  */
 async function downloadFile(url, { stallSeconds = 30, attempts = 3, retryWaitSeconds = 10 } = {}) {
     const dir = process.env['RUNNER_TEMP'] || external_os_default().tmpdir();
@@ -35931,42 +36013,50 @@ async function downloadOnce(url, dest, stallSeconds) {
         socketTimeout: (stallSeconds + 5) * 1000
     });
     let response;
-    let stalled = false;
-    // Restarted by every chunk received (refresh)
-    const timer = setTimeout(() => {
-        stalled = true;
-        // Destroys the connections of a direct request, waiting or mid-body
+    let ended = false;
+    // Destroys the connections of a direct request, waiting or mid-body. Behind
+    // a proxy, a tunnel still waiting for its CONNECT answer is out of reach;
+    // the watchdog ends the attempt anyway and index.ts ends the process.
+    const destroyConnections = () => {
         client.dispose();
         response?.message.destroy();
-    }, stallSeconds * 1000);
+    };
     try {
-        response = await client.get(url);
-        const status = response.message.statusCode;
-        if (status !== 200) {
-            throw new DownloadError(`HTTP ${status}`, status);
-        }
-        const progress = new external_stream_namespaceObject.Transform({
-            transform(chunk, _encoding, callback) {
-                timer.refresh();
-                callback(null, chunk);
+        await withWatchdog(stallSeconds, destroyConnections, async (refresh) => {
+            response = await client.get(url);
+            if (ended) {
+                // Answer came after the stall: never write into `dest` again, the
+                // next attempt uses it
+                response.message.destroy();
+                return;
             }
+            const status = response.message.statusCode;
+            if (status !== 200) {
+                throw new DownloadError(`HTTP ${status}`, status);
+            }
+            const progress = new external_stream_namespaceObject.Transform({
+                transform(chunk, _encoding, callback) {
+                    refresh();
+                    callback(null, chunk);
+                }
+            });
+            await (0,promises_namespaceObject.pipeline)(response.message, progress, external_fs_default().createWriteStream(dest));
         });
-        await (0,promises_namespaceObject.pipeline)(response.message, progress, external_fs_default().createWriteStream(dest));
     }
     catch (error) {
-        if (stalled) {
-            throw new DownloadError(`download stalled: no data for ${stallSeconds} seconds`);
+        if (error instanceof StallError) {
+            throw new DownloadError(`download stalled: ${error.message}`);
         }
         throw error;
     }
     finally {
-        clearTimeout(timer);
-        response?.message.destroy();
-        client.dispose();
+        ended = true;
+        destroyConnections();
     }
 }
 
 ;// CONCATENATED MODULE: ./src/util.ts
+
 
 
 const REPO = 'dbsnapper/dbsnapper';
@@ -36003,10 +36093,10 @@ const VERSION_PATTERN = /^v?\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/;
  * number (`2.9.0` or `v2.9.0`) and is installed as pinned. `token` is sent only
  * to api.github.com, for the `latest` lookup.
  */
-async function resolveRelease(version, token) {
+async function resolveRelease(version, token, { stallSeconds = 30 } = {}) {
     let tag;
     if (!version || version === 'latest') {
-        tag = await getLatestTag(token);
+        tag = await getLatestTag(token, stallSeconds);
     }
     else if (VERSION_PATTERN.test(version)) {
         tag = `v${stripLeadingV(version)}`;
@@ -36027,10 +36117,30 @@ async function resolveRelease(version, token) {
 function latestLookupError(reason) {
     return new Error(`Failed to resolve the latest DBSnapper Agent release: ${reason}`);
 }
+// Unlike http-client's readBody, which never settles (and so lets Node exit
+// with code 0 when nothing else is pending) when the connection closes
+// before the answer is complete
+async function readAll(res, refresh) {
+    const chunks = [];
+    try {
+        for await (const chunk of res.message) {
+            refresh();
+            chunks.push(chunk);
+        }
+    }
+    catch (error) {
+        if (res.message.complete)
+            throw error;
+    }
+    if (!res.message.complete) {
+        throw new Error('the connection closed before the whole answer arrived');
+    }
+    return Buffer.concat(chunks).toString();
+}
 // GitHub's "latest release" is the newest release that is neither a draft
 // nor a prerelease:
 // https://docs.github.com/en/rest/releases/releases#get-the-latest-release
-async function getLatestTag(token) {
+async function getLatestTag(token, stallSeconds) {
     const httpClient = new lib_HttpClient('dbsnapper-install-gh-action', [], {
         headers: {
             Accept: 'application/vnd.github+json',
@@ -36041,20 +36151,35 @@ async function getLatestTag(token) {
     const headers = token
         ? { authorization: `Bearer ${token}` }
         : {};
-    let status;
-    let body;
+    let res;
+    // Destroys a direct connection, also one http-client's timeout left
+    // half-closed; behind a proxy the watchdog ends the lookup anyway
+    const destroyConnections = () => {
+        httpClient.dispose();
+        res?.message.destroy();
+    };
+    let answer;
     try {
-        const res = await httpClient.get(url, headers);
-        status = res.message.statusCode;
-        body = await res.readBody();
+        answer = await withWatchdog(stallSeconds, destroyConnections, async (refresh) => {
+            res = await httpClient.get(url, headers);
+            return {
+                status: res.message.statusCode,
+                body: await readAll(res, refresh)
+            };
+        });
     }
     catch (error) {
-        throw latestLookupError(`${url}: ${error instanceof Error ? error.message : error}`);
+        const reason = error instanceof StallError
+            ? `the answer stalled: ${error.message}`
+            : error instanceof Error
+                ? error.message
+                : `${error}`;
+        throw latestLookupError(`${url}: ${reason}`);
     }
     finally {
-        // Destroys the connection, also one http-client's timeout left half-closed
-        httpClient.dispose();
+        destroyConnections();
     }
+    const { status, body } = answer;
     if (status === 401 && token) {
         throw latestLookupError(`${url} answered HTTP 401: GitHub refused the token. Pin a version (version: 2.9.0) to skip this lookup, or pass a valid token (token input)`);
     }
@@ -36149,8 +36274,9 @@ async function run() {
  * The entrypoint for the action.
  */
 
+
 // eslint-disable-next-line @typescript-eslint/no-floating-promises
-run();
+runToEnd(run);
 
 })();
 
