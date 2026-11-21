@@ -59,8 +59,19 @@ jobs:
         with:
           version: latest
 
-      - name: Test Local Action Latest Version
+      - name: Test Local Action Specific Version
         id: test-action-specific-version
         uses: ./
         with:
           version: v2.7.1
+
+      # A green install step alone does not prove the agent runs: this one
+      # calls it from PATH. The last install wins (its directory comes first)
+      - name: Run Installed Agent
+        id: run-installed-agent
+        shell: bash
+        run: |
+          command -v dbsnapper
+          version="$(dbsnapper --version)"
+          echo "$version"
+          grep -q -E '^DBSnapper Agent - Version: 2\.7\.1 ' <<<"$version"

@@ -1,8 +1,26 @@
 import * as core from '@actions/core'
 import { Writable } from 'stream'
+import { inspect } from 'util'
 
 export const ENDED_EARLY =
   'The action ended before the install finished (a connection closed without an error); nothing was installed. Run the job again'
+
+// How long the end waits for the output to be written before it exits anyway
+const FLUSH_LIMIT_MS = 10_000
+
+/**
+ * The failure line's text for any rejection value. Never throws: a template
+ * string throws for a Symbol or an object without a prototype, and a getter
+ * or a proxy can throw on any access.
+ */
+function describe(error: unknown): string {
+  try {
+    const text = error instanceof Error ? error.message : error
+    return typeof text === 'string' ? text : inspect(text)
+  } catch {
+    return 'a value that cannot be shown as text'
+  }
+}
 
 /**
  * Runs the action, then ends the process with the exit code the action set.
@@ -12,6 +30,8 @@ export const ENDED_EARLY =
  * - The end waits until `output` (stdout and stderr) has written what is
  *   queued: on Linux a pipe, which is what the runner reads, is asynchronous,
  *   and process.exit() drops writes still queued, the error line among them.
+ *   The wait ends after FLUSH_LIMIT_MS: a reader that stays alive but stops
+ *   reading would otherwise hold the step until the job's time limit.
  * - An action that rejects fails the step with its error; otherwise the exit
  *   code would still be 0 (nothing called setFailed) and the step green.
  * - If Node runs out of work before the action finished (a promise that never
@@ -31,22 +51,28 @@ export async function runToEnd(
   try {
     await action()
   } catch (error) {
-    core.setFailed(
-      `The action failed unexpectedly: ${error instanceof Error ? error.message : error}`
-    )
+    core.setFailed(`The action failed unexpectedly: ${describe(error)}`)
   } finally {
     finished = true
     process.off('beforeExit', onBeforeExit)
   }
   // Writes complete in order: the callback of this empty write comes after
   // everything queued before it (or with the stream's error, if it has one)
-  await Promise.all(
-    output.map(
-      async stream =>
-        new Promise<void>(resolve => {
-          stream.write('', () => resolve())
-        })
-    )
-  )
+  let limit: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([
+    Promise.all(
+      output.map(
+        async stream =>
+          new Promise<void>(resolve => {
+            stream.write('', () => resolve())
+          })
+      )
+    ),
+    new Promise<void>(resolve => {
+      limit = setTimeout(resolve, FLUSH_LIMIT_MS)
+    })
+  ])
+  // On the normal path the timer must not keep Node running
+  clearTimeout(limit)
   exit()
 }
