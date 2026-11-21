@@ -1,8 +1,7 @@
 # dbs-install-ia14-16: end-of-run nits IA14–IA16, CI runs the installed agent (row 1184)
 
-Legend: ✅ works / done · ❌ fails / not done · ⏳ waits on the Mac run ·
-[INFERENCE] = not verified by a command · [estimate] = a guess, with its basis ·
-Z = UTC.
+Legend: ✅ works / done · ❌ fails / not done · [INFERENCE] = not verified by a
+command · [estimate] = a guess, with its basis · Z = UTC.
 
 - **`runToEnd`** = `src/lifecycle.ts`: runs the action, waits for stdout and
   stderr to write what is queued, then ends the process.
@@ -26,10 +25,10 @@ Z = UTC.
   stream, string rejection).
 - ✅ **CI:** a step after the two install steps runs `dbsnapper --version` from
   `PATH` and expects 2.7.1, the version the last install step put first.
-- ✅ Jest on the head tree, alfa, Node 24.22.3: 6 suites, **54 passed, 0
+- ✅ Jest on the head tree, alfa and Mac, Node 24.22.3: 6 suites, **54 passed, 0
   failed**; `npm run all` exit 0; a second `npm run bundle` gives the same
-  bytes. The first Mac run (RIA14) had found 2 broken IA15 tests (52/54): a test
-  bug, fixed in round 2 (below).
+  bytes, identical on both hosts. The first Mac run (RIA14) had found 2 broken
+  IA15 tests (52/54): a test bug, fixed in round 2 (below).
 
 ## The change
 
@@ -108,6 +107,20 @@ staged files: round 1 `d6fe055f` (= the Mac's RIA14 tree), round 2 `401721cd`.
 - The Mac rerun job with these counts as expected values:
   `~/private/dbs-conductor/dbs-install-ia14-16-mac2/` (round 2 `head.patch`;
   `base.patch` and the 6 mutant patches byte-identical to round 1).
+
+### Jest (round 2, Mac: RIA14B)
+
+The conductor's Mac run of that job (`~/.local/state/alfa-app/mac/RIA14B.out`,
+sha256 `42f86038…`, 23:31:20Z–23:31:44Z): Node 24.22.3, npm 11.19.1, tree
+`401721cd` (as on alfa). Every expected value met, no Jest rerun:
+
+| Step                            | RIA14B                                                                                                                             |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 1: `npm ci && npm run all`      | ✅ exit 0, 6 suites, **54 passed / 54**, 0 `✕`, 0 ESLint errors                                                                    |
+| 2: `npm run bundle` again       | ✅ exit 0, `dist/index.js` and `.map` `OK`; all 4 `dist/` hashes equal alfa's (`cdf6b4a4…`, `79d59b9d…`, `ac5e612d…`, `c2a14a81…`) |
+| 3: base `src/lifecycle.ts`      | ✅ 3 failed / 7 passed: Symbol, null prototype, never-reading reader                                                               |
+| 4: `m2`, `m3`, `m4`, `m6`, `m8` | ✅ 1 failed / 9 passed each, its target test only                                                                                  |
+| 4: `m5-race-streams`            | ✅ 3 failed / 7 passed: queued output (IA13), every output stream, never-reading reader                                            |
 
 #### Why round 1 predicted 54 passed and got 52
 
@@ -198,21 +211,21 @@ staged files: round 1 `d6fe055f` (= the Mac's RIA14 tree), round 2 `401721cd`.
 
 ## Open items
 
-- Mac rerun (if the conductor wants one before merge): job
-  `~/private/dbs-conductor/dbs-install-ia14-16-mac2/`, expected values = the
-  alfa counts above; the Mac gate on the merged tree runs anyway.
+- The Mac gate on the merged tree (`make check` / pre-release; conductor).
 - First CI run on `main` after the merge: the new step (alfa-app's GO).
 - Moving `v1`, a release: Joe.
 
 ## Status
 
-- Head: `b0d2481` plus the uncommitted change (no commit yet: worker protocol,
-  commit on the conductor's word).
-- Changed files (`git diff --stat b0d2481`): `src/lifecycle.ts` 48 lines
+- Commits on branch `dbs-install-ia14-16`, on `b0d2481` (origin/main at commit
+  time): `d923a757` (the change, tree `eed31374`), then this results commit (its
+  sha is in the `commit` message: a commit cannot name itself). No push, no tag,
+  no release, no workflow started.
+- Changed files in `d923a757` (`git show --stat`): `src/lifecycle.ts` 48 lines
   changed, `__tests__/lifecycle.test.ts` +134 lines, `.github/workflows/ci.yml`
-  13 lines changed, `dist/index.js` and `dist/index.js.map` rebuilt; this report
-  (new). Not committed: `badges/coverage.svg` (only in the `/tmp` clone; earlier
-  rounds left it out too).
+  13 lines changed, `dist/index.js` and `dist/index.js.map` rebuilt (byte-equal
+  to the alfa run's bundle, `cmp`), this report (new). Not committed:
+  `badges/coverage.svg` (earlier rounds left it out too).
 - Ran on alfa (2026-11-21):
   - Round 1 (about 21:30Z–21:57Z): `tsc` 2×, ESLint, Prettier on the changed
     files; the logic check (8 trees × 9 checks); the 2 real-process probes; the
@@ -226,4 +239,6 @@ staged files: round 1 `d6fe055f` (= the Mac's RIA14 tree), round 2 `401721cd`.
   lines of `dist/index.js`. `dist/index.js.map` is one line, so all of it counts
   as added: private terms 0, key formats 4, the same 4 as in b0d2481's map
   (third-party code).
-- Left: the conductor's review stop; commit on its word (by path, no push).
+- Ran on the Mac (conductor): RIA14 (round 1, 52/54) and RIA14B (round 2, every
+  expected value met), section "Jest (round 2, Mac: RIA14B)".
+- Left: the conductor's review stop.
