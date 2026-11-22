@@ -1,4 +1,4 @@
-# dbs-install-ia14-16: end-of-run nits IA14–IA16, CI runs the installed agent (row 1184)
+# dbs-install-ia14-16: IA14–IA16, CI runs the installed agent (row 1184)
 
 Legend: ✅ works / done · ❌ fails / not done · [INFERENCE] = not verified by a
 command · [estimate] = a guess, with its basis · Z = UTC.
@@ -124,8 +124,8 @@ sha256 `42f86038…`, 23:31:20Z–23:31:44Z): Node 24.22.3, npm 11.19.1, tree
 
 #### Why round 1 predicted 54 passed and got 52
 
-- ❌ The TypeScript tests had never run before RIA14: no Jest on alfa in round
-  1. The 54 came from a plain-Node replay of their logic (below).
+- ❌ The TypeScript tests had never run before RIA14: no Jest on alfa in the
+  first round. The 54 came from a plain-Node replay of their logic (below).
 - The bug was in the test, not in `src/`: it read `stdout.mock.calls` **after**
   `stdout.mockRestore()` in its `finally`, and Jest's `mockRestore()` also
   clears `mock.calls`. The array was always empty; the exit-code check before it
@@ -177,10 +177,10 @@ sha256 `42f86038…`, 23:31:20Z–23:31:44Z): Node 24.22.3, npm 11.19.1, tree
 - Normal path, same probe with a reader that reads (`wc -c`; Node 26.13.1,
   21:52Z): ✅ exit 1 at 7 ms, 200,017 of 200,017 bytes. The limit costs nothing
   when the output goes out.
-- A trap for whoever probes this next: the session shell's own `timeout` builtin
-  reported status 124 for a node that had already exited (`/proc/<pid>/status`
-  showed it as a zombie, not reaped). Only coreutils `/usr/bin/timeout` gives
-  node's real status; the table uses it.
+- A trap for whoever probes this next: the session shell's own `timeout`
+  built-in reported status 124 for a node that had already exited
+  (`/proc/<pid>/status` showed it as a zombie, not reaped). Only coreutils
+  `/usr/bin/timeout` gives node's real status; the table uses it.
 
 ### CI step
 
@@ -211,21 +211,33 @@ sha256 `42f86038…`, 23:31:20Z–23:31:44Z): Node 24.22.3, npm 11.19.1, tree
 
 ## Open items
 
-- The Mac gate on the merged tree (`make check` / pre-release; conductor).
+- The Mac gate on the merged tree (`make check` / `make pre-release`;
+  conductor).
 - First CI run on `main` after the merge: the new step (alfa-app's GO).
 - Moving `v1`, a release: Joe.
 
 ## Status
 
 - Commits on branch `dbs-install-ia14-16`, on `b0d2481` (origin/main at commit
-  time): `d923a757` (the change, tree `eed31374`), then this results commit (its
-  sha is in the `commit` message: a commit cannot name itself). No push, no tag,
-  no release, no workflow started.
+  time): `d923a757` (the change, tree `eed31374`), `951b1a77` (the Mac counts),
+  then the review fix IA17 + IA21 (its sha is in the `review` message: a commit
+  cannot name itself). No push, no tag, no release, no workflow started.
 - Changed files in `d923a757` (`git show --stat`): `src/lifecycle.ts` 48 lines
   changed, `__tests__/lifecycle.test.ts` +134 lines, `.github/workflows/ci.yml`
   13 lines changed, `dist/index.js` and `dist/index.js.map` rebuilt (byte-equal
-  to the alfa run's bundle, `cmp`), this report (new). Not committed:
-  `badges/coverage.svg` (earlier rounds left it out too).
+  to the alfa run's bundle, `cmp`), this report (new).
+- Review fix (review-dbs-install-ia14-16, no code, no `dist/` change):
+  - IA17: Lint Codebase would fail on this report. The title was 88 characters
+    (MD013: 80) and 2 words were on textlint's terminology list (`built-in`,
+    `make pre-release` now in a code span). Fixed with the reviewer's
+    replacements. Also a wrapped "round 1." that started a line as `1.`, which
+    Markdown reads as an ordered list, is reworded. Checked with the reviewer's
+    lint model (`textlint-model.mjs`, sha256 `01283b7a…`; not the real tools): 0
+    MD013 lines, 0 terminology hits (1 and 2 on `951b1a77`'s report); the rest
+    of `.github/linters/.markdown-lint.yml` read against the file: 0 `*`/`+`
+    bullets, 0 ordered lists, 0 code blocks, 0 duplicate headings.
+  - IA21: `badges/coverage.svg` committed as round 2's run B wrote it on alfa
+    (95.28%, file time 23:25Z; it said 83.33% from b0d2481). Not regenerated.
 - Ran on alfa (2026-11-21):
   - Round 1 (about 21:30Z–21:57Z): `tsc` 2×, ESLint, Prettier on the changed
     files; the logic check (8 trees × 9 checks); the 2 real-process probes; the
