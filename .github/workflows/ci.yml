@@ -46,7 +46,12 @@ jobs:
 
   test-action:
     name: GitHub Actions Test
-    runs-on: ubuntu-latest
+    # arm64 too: the action picks the archive by the runner's architecture
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout
@@ -66,12 +71,23 @@ jobs:
           version: v2.7.1
 
       # A green install step alone does not prove the agent runs: this one
-      # calls it from PATH. The last install wins (its directory comes first)
+      # calls it from PATH. The last install wins (its directory comes first).
+      # The agent must be the file an install unpacked: named dbsnapper,
+      # executable, in a directory of its own right under the runner's
+      # temporary directory (tool-cache's extractTar), not a copy from elsewhere
       - name: Run Installed Agent
         id: run-installed-agent
         shell: bash
         run: |
-          command -v dbsnapper
+          agent="$(command -v dbsnapper)"
+          echo "$agent"
+          if [[ "$(basename "$agent")" != dbsnapper ||
+            "$(dirname "$(dirname "$agent")")" != "${RUNNER_TEMP%/}" ||
+            ! -f "$agent" || ! -x "$agent" ]]; then
+            echo "::error::dbsnapper on PATH is '$agent': not an executable" \
+              "file named dbsnapper in a directory under RUNNER_TEMP"
+            exit 1
+          fi
           version="$(dbsnapper --version)"
           echo "$version"
           grep -q -E '^DBSnapper Agent - Version: 2\.7\.1 ' <<<"$version"

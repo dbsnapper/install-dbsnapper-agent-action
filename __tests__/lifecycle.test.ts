@@ -20,6 +20,18 @@ function quietOutput(): Writable {
   })
 }
 
+const FAILURE = '::error::The action failed unexpectedly: '
+
+// The failure line's text as the action gave it: the runner's escaping
+// (`%` → %25, CR → %0D, LF → %0A) reversed
+function unescapeLine(line: string): string {
+  return line
+    .slice(FAILURE.length, -EOL.length)
+    .replace(/%0D/g, '\r')
+    .replace(/%0A/g, '\n')
+    .replace(/%25/g, '%')
+}
+
 describe('lifecycle.ts', () => {
   let setFailed: jest.SpyInstance
 
@@ -32,6 +44,45 @@ describe('lifecycle.ts', () => {
   afterEach(() => {
     jest.useRealTimers()
   })
+
+  // Runs an action that rejects with `value`, with the real setFailed: it sets
+  // process.exitCode and writes the line. The lines are kept here:
+  // mockRestore() also clears mock.calls
+  async function failWith(value: unknown): Promise<{
+    exitCode: typeof process.exitCode
+    errorLines: string[]
+    exits: number
+  }> {
+    const exit = jest.fn()
+    setFailed.mockRestore()
+    const written: string[] = []
+    const stdout = jest
+      .spyOn(process.stdout, 'write')
+      .mockImplementation(chunk => {
+        written.push(`${chunk}`)
+        return true
+      })
+    const exitCodeBefore = process.exitCode
+    let exitCode: typeof process.exitCode
+    try {
+      await runToEnd(
+        async () => {
+          throw value
+        },
+        exit,
+        [quietOutput()]
+      )
+      exitCode = process.exitCode
+    } finally {
+      stdout.mockRestore()
+      process.exitCode = exitCodeBefore
+    }
+    return {
+      exitCode,
+      errorLines: written.filter(line => line.startsWith('::error::')),
+      exits: exit.mock.calls.length
+    }
+  }
 
   test('ends the process once the action finished, so no connection left open can hold the step', async () => {
     const exit = jest.fn()
@@ -92,41 +143,69 @@ describe('lifecycle.ts', () => {
   ])(
     'a rejection with %s, which a template string cannot turn into text, still gives exit code 1 and the error line',
     async (_kind, value, text) => {
-      const exit = jest.fn()
-      // The real setFailed: it sets process.exitCode and writes the line.
-      // The lines are kept here: mockRestore() also clears mock.calls
-      setFailed.mockRestore()
-      const written: string[] = []
-      const stdout = jest
-        .spyOn(process.stdout, 'write')
-        .mockImplementation(chunk => {
-          written.push(`${chunk}`)
-          return true
-        })
-      const exitCodeBefore = process.exitCode
-      let exitCode: typeof process.exitCode
-      try {
-        await runToEnd(
-          async () => {
-            throw value
-          },
-          exit,
-          [quietOutput()]
-        )
-        exitCode = process.exitCode
-      } finally {
-        stdout.mockRestore()
-        process.exitCode = exitCodeBefore
-      }
+      const { exitCode, errorLines, exits } = await failWith(value)
 
       expect(exitCode).toBe(1)
-      const errorLines = written.filter(line => line.startsWith('::error::'))
-      expect(errorLines).toEqual([
-        `::error::The action failed unexpectedly: ${text}${EOL}`
-      ])
-      expect(exit).toHaveBeenCalledTimes(1)
+      expect(errorLines).toEqual([`${FAILURE}${text}${EOL}`])
+      expect(exits).toBe(1)
     }
   )
+
+  test('a rejection whose message cannot be read still fails the step with the fallback text', async () => {
+    // An Error whose `message` getter throws: reading it is the first thing
+    // the failure line does
+    class Unreadable extends Error {
+      get message(): string {
+        throw new Error('no message')
+      }
+    }
+
+    const { exitCode, errorLines, exits } = await failWith(new Unreadable())
+
+    expect(exitCode).toBe(1)
+    expect(errorLines).toEqual([
+      `${FAILURE}a value that cannot be shown as text${EOL}`
+    ])
+    expect(exits).toBe(1)
+  })
+
+  test.each([
+    [
+      'an object with 200,000 fields',
+      Object.fromEntries(
+        Array.from({ length: 200_000 }, (_, i) => [`field${i}`, i])
+      ),
+      '{'
+    ],
+    ['a 5 MB string', 'x'.repeat(5_000_000), 'x'.repeat(2_000)]
+  ])(
+    'a rejection with %s gives a failure line of 2,000 characters of text, marked as cut',
+    async (_kind, value, start) => {
+      const { exitCode, errorLines, exits } = await failWith(value)
+
+      expect(exitCode).toBe(1)
+      expect(errorLines).toHaveLength(1)
+      // The runner's escaping can make a character of the text 3 of the line
+      expect(errorLines[0].length).toBeLessThan(FAILURE.length + 3 * 2_100)
+      const text = unescapeLine(errorLines[0])
+      expect(text.startsWith(start)).toBe(true)
+      expect(text).toMatch(
+        /^[\s\S]{2000} \.\.\. \(cut: 2000 of \d+ characters shown\)$/
+      )
+      expect(exits).toBe(1)
+    }
+  )
+
+  test('the cut does not split a character made of two UTF-16 units', async () => {
+    // The emoji's first half is the text's 2,000th unit: the cut goes before it
+    const value = `${'a'.repeat(1_999)}😀${'b'.repeat(10)}`
+
+    const { errorLines } = await failWith(value)
+
+    expect(errorLines).toEqual([
+      `${FAILURE}${'a'.repeat(1_999)} ... (cut: 1999 of 2011 characters shown)${EOL}`
+    ])
+  })
 
   test('the process ends only after the output queued before has been written', async () => {
     const exit = jest.fn()

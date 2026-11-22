@@ -8,6 +8,22 @@ export const ENDED_EARLY =
 // How long the end waits for the output to be written before it exits anyway
 const FLUSH_LIMIT_MS = 10_000
 
+// The failure line shows this many characters of its text at most: a rejected
+// object's fields or a long string would otherwise make one line of megabytes
+const TEXT_LIMIT = 2_000
+
+/**
+ * `text` cut to TEXT_LIMIT characters, with a mark saying so. The cut never
+ * falls between the two halves of a character outside the Basic Multilingual
+ * Plane (an emoji, for one), which would leave half a character.
+ */
+function shorten(text: string): string {
+  if (text.length <= TEXT_LIMIT) return text
+  const last = text.charCodeAt(TEXT_LIMIT - 1)
+  const end = last >= 0xd800 && last <= 0xdbff ? TEXT_LIMIT - 1 : TEXT_LIMIT
+  return `${text.slice(0, end)} ... (cut: ${end} of ${text.length} characters shown)`
+}
+
 /**
  * The failure line's text for any rejection value. Never throws: a template
  * string throws for a Symbol or an object without a prototype, and a getter
@@ -16,7 +32,7 @@ const FLUSH_LIMIT_MS = 10_000
 function describe(error: unknown): string {
   try {
     const text = error instanceof Error ? error.message : error
-    return typeof text === 'string' ? text : inspect(text)
+    return shorten(typeof text === 'string' ? text : inspect(text))
   } catch {
     return 'a value that cannot be shown as text'
   }
