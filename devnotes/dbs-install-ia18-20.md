@@ -23,9 +23,9 @@ command · [estimate] = a guess, with its basis · Z = UTC.
   `RUNNER_TEMP` (where the action unpacks it). The job `GitHub Actions Test`
   runs on `ubuntu-latest` and on `ubuntu-24.04-arm`.
 - ✅ **IA20:** the failure line shows at most 2,000 characters of its text, then
-  ` ... (cut: 2000 of N characters shown)`. The cut never splits a character
-  made of two UTF-16 units. 3 tests, each failing on base `d05f62a`; `dist/`
-  rebuilt on the Mac.
+  a space and `... (cut: 2000 of N characters shown)`. The cut never splits a
+  character made of two UTF-16 units. 3 tests, each failing on base `d05f62a`;
+  `dist/` rebuilt on the Mac.
 - ✅ Jest on the Mac (RIA18, Node 24.22.3): 6 suites, **58 passed / 58**, 0
   failed; every predicted count of the job met. No `npm ci`, Jest or bundle on
   alfa (handoff rule).
@@ -35,8 +35,8 @@ command · [estimate] = a guess, with its basis · Z = UTC.
 - `src/lifecycle.ts`
   - New `TEXT_LIMIT = 2_000` and `shorten(text)`: text of 2,000 UTF-16 units or
     fewer stays as it is; longer text is cut at 2,000 units, or at 1,999 when
-    unit 2,000 is the first half of a pair (an emoji), and gets the mark
-    ` ... (cut: <shown> of <total> characters shown)`.
+    unit 2,000 is the first half of a pair (an emoji), and gets a space and the
+    mark `... (cut: <shown> of <total> characters shown)`.
   - `describe()` passes its text through `shorten()`, inside its `try`.
   - Not changed: `Error` and string texts under 2,000 characters (the 2 older
     tests pin them), the fallback text, the flush.
@@ -89,8 +89,8 @@ command · [estimate] = a guess, with its basis · Z = UTC.
 
 - `shorten()` alone in Node 26.13.1 (type stripping, a copy of the function, a
   few seconds):
-  - `'a' × 1,999 + 😀 + 'b' × 10` (2,011 units) → 1,999 `a` +
-    ` ... (cut: 1999 of 2011 characters shown)`;
+  - `'a' × 1,999 + 😀 + 'b' × 10` (2,011 units) → 1,999 `a`, a space and
+    `... (cut: 1999 of 2011 characters shown)`;
   - `util.inspect` of a 200,000-key object (4,377,782 characters, 563 ms) →
     2,044 characters;
   - a 5,000,000-character string → 2,044 characters;
@@ -164,8 +164,8 @@ rerun:
   escaping. Worst case the line is about 3 × 2,000 characters, still bounded.
 - **Characters = UTF-16 units**, as `String.length` counts them; the only border
   rule is the pair rule (no grapheme clusters: one more rule for a NIT).
-- **ASCII mark** ` ... (cut: …)`: no `…` character, so the line reads the same
-  in any log viewer.
+- **ASCII mark** `... (cut: …)`: no `…` character, so the line reads the same in
+  any log viewer.
 - **`util.inspect` still sees the whole value.** A 200,000-key object costs
   about 0.6 s on alfa before the cut (above). `inspect` has no option for a
   total length; the case is not reachable today (review: "latent").
