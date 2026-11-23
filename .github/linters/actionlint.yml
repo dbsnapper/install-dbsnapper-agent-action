@@ -1,0 +1,5 @@
+# actionlint 1.7.1 in super-linter v6 does not know GitHub's arm64 label
+# (known from 1.7.7). Drop this file after the super-linter bump.
+self-hosted-runner:
+  labels:
+    - ubuntu-24.04-arm

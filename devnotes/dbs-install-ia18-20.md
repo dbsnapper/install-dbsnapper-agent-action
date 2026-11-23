@@ -184,6 +184,8 @@ rerun:
 
 - First CI run on `main` after the merge, including both `GitHub Actions Test`
   runners (alfa-app's GO): proves the path check and arm64 on real runners.
+- IA22: drop `.github/linters/actionlint.yml` at the super-linter bump (its
+  actionlint 1.7.1 does not know `ubuntu-24.04-arm`; known from 1.7.7).
 
 ## Status
 
@@ -200,4 +202,6 @@ rerun:
   `dist/index.js`. `dist/index.js.map` is one line, so all of it counts as
   added: private terms 0, key formats 4, the same 4 as in `d05f62a`'s map
   (third-party code).
+- Review fix IA22 (second commit, config only): `.github/linters/actionlint.yml`
+  lists `ubuntu-24.04-arm` so Lint Codebase's actionlint 1.7.1 accepts it.
 - Left: the conductor's review stop.
